@@ -6,7 +6,7 @@ trigger: user asks to backtest, backtest,回测, run strategy on A-share data, e
 tags: [finance, stocks, a-share, backtesting, quantitative, numpy, pandas]
 ---
 
-# A-Share Stock Strategy Backtesting
+> ⚠️ **合并说明**：本技能已与 `a-share-strategy-development` 合并。`a-share-strategy-development` 包含最新项目结构（`core/` + `strategies/` 子目录）、完整 import 路径、以及 30 策略全量排名。本技能保留旧扁平结构引用，仅做历史参考。
 
 ## Data Prerequisites
 
@@ -260,26 +260,97 @@ This ensures returns are always relative to the initial capital, preventing comp
 
 ## Strategy Signal Generation Techniques
 
-### Full 30-Strategy Results (2016-2026, ¥100M fixed base)
+### Full 10-Strategy Results (2016-2026, ¥100M fixed base)
 
-| Rank | ID | Strategy | Total Return | Ann. Return | Sharpe | Max DD |
-|------|----|----------|-------------|-------------|--------|--------|
-| 1 | S27 | 涨幅TOP10%日频 | +633% | 63.9% | 1.51 | -77% |
-| 2 | S21 | 超跌5日周频 | +366% | 36.9% | 1.16 | -83% |
-| 3 | S25 | 低价股日频 | +318% | 32.2% | 1.39 | -61% |
-| 4 | S19 | 20日新高日频 | +281% | 28.4% | 1.10 | -67% |
-| 5 | S18 | 连跌3日日频 | +249% | 25.1% | 0.98 | -62% |
-| 6 | S20 | 20日新低日频 | +244% | 24.6% | 1.06 | -66% |
-| 7 | S16 | 布林带上轨日频 | +228% | 23.0% | 0.82 | -71% |
-| 8 | S06 | 动量日频 | +227% | 22.9% | 0.71 | -51% |
-| 9 | S24 | 60日低夏普周频 | +179% | 18.1% | 0.59 | -44% |
-| 10 | S07 | 低波周频 | +154% | 15.6% | 0.64 | -41% |
-| ... | ... | ... | ... | ... | ... | ... |
-| 28 | S22 | 超涨5日周频 | -96% | -9.7% | -0.81 | -97% |
-| 29 | S28 | 跌幅TOP10%日频 | -98% | -9.9% | -1.02 | -98% |
-| 30 | S15 | 布林带下轨日频 | -99% | -10.0% | -0.02 | -100% |
+*Only S01-S10 were backtested. S11-S36 (composite indicators, Bollinger, N-day high/low, etc.) have code written but results not yet generated. See `run_all.py` to batch-execute.*
 
-**Summary patterns**: Momentum/extremes win (top 10% winners +633%, new highs +281%). Oversold bounces also work (5d drops +366%, 3-day drops +249%). Low-price effect is real (+318% vs -4% for high-price). Deceleration and reverse signals consistently lose money.
+| Rank | ID | Strategy | Total Return | Ann. Return | Sharpe | Max DD | Info Ratio |
+|------|----|----------|-------------|-------------|--------|--------|-----------|
+| 1 | S06 | 动量日频 | +239.78% | 24.22% | 0.73 | -50.12% | 0.62 |
+| 2 | S07 | 低波周频 | +154.01% | 15.55% | 0.64 | -41.34% | 0.61 |
+| 3 | S02 | 等权周频 | +134.49% | 13.58% | 0.49 | -48.86% | 0.72 |
+| 4 | S01 | 等权日频 | +134.16% | 13.55% | 0.49 | -48.88% | 0.72 |
+| 5 | S03 | 均值回归周频 | +11.80% | 1.19% | 0.14 | -35.81% | 0.01 |
+| 6 | S04 | 均值回归日频 | +3.18% | 0.32% | 0.02 | -61.03% | -0.05 |
+| 7 | S05 | 动量周频 | -29.45% | -2.97% | -0.21 | -64.60% | -0.34 |
+| 8 | S08 | 高波周频 | -48.05% | -4.85% | -0.34 | -75.80% | -0.58 |
+| 9 | S10 | RSI超买周频 | -80.79% | -8.16% | -0.72 | -87.10% | -0.95 |
+| 10 | S09 | RSI超卖周频 | +24677%* | — | 0.91 | -82.37% | 0.03 |
+
+*\*S09 RSI oversold returns are spurious due to concentration blowup (see "RSI Oversold safety" below).*
+
+#### Composite & Stateful Strategies (Design Patterns)
+
+Signal generators that combine multiple conditions for more selective entries (code exists as `s31_*.py` ~ `s36_*.py`, not yet backtested):
+
+```python
+# S32: Uptrend pullback — MA5>MA10>MA20 + price near MA20 + up today
+ma5 = _ma(close, 5); ma10 = _ma(close, 10); ma20 = _ma(close, 20)
+uptrend = (ma5 > ma10) & (ma10 > ma20)
+near_ma20 = np.abs(close / ma20 - 1.0) < 0.02
+ret = ...; up_today = ret > 0
+signal = uptrend & near_ma20 & up_today
+
+# S33: Volatility squeeze — 10d vol < 20d vol×0.7 + 5d high
+vol10 = _vol(close, 10); vol20 = _vol(close, 20)
+squeeze = (vol10 < vol20 * 0.7) & (vol20 > 0)
+
+# S34: Bull flag — 5d gain>3% + 2d consolidation (<2% pullback) + up today
+up5 = (close[:, t] / close[:, t-4] - 1.0) > 0.03
+max_pullback = np.maximum(np.abs(ret_d1), np.abs(ret_d2))
+flag = (max_pullback < 0.02)
+signal = up5 & flag & up_today
+
+# S35: Double bottom bounce — N-day low + hold M days
+for s in np.where(at_low)[0]:
+    signal[s, t:t+hold_days] = True
+```
+
+#### Stateful Per-Stock Strategies (S31)
+
+For strategies needing position-level state tracking (e.g., "buy at 60-day high, sell at 10% drawdown from peak"), iterate stock-by-stock with a state machine:
+
+```python
+for s in range(n_stocks):
+    in_pos = False; peak = 0.0
+    for t in range(n_days):
+        if not in_pos:
+            if t >= lookback and prices[t] >= np.nanmax(window):
+                signal[s, t] = True; in_pos = True; peak = prices[t]
+        else:
+            signal[s, t] = True
+            peak = max(peak, prices[t])
+            if prices[t] <= peak * (1 - stop_loss):
+                signal[s, t] = False; in_pos = False
+```
+
+The engine sees only the final bool matrix — any state machine logic hidden inside `generate_signal()` works transparently.
+
+### Parameter Tuning Methodology
+
+For strategies with knobs (lookback, hold_days, threshold %), run a grid search to find the excess-Sharpe-maximizing combination:
+
+```python
+for lb in [5, 10, 15, 20, 30]:
+    for hd in [3, 5, 8, 10, 15]:
+        signal = generate_signal(close, dates, lookback=lb, hold_days=hd)
+        e = BacktestEngine(...)
+        e.run(close, signal, dates, trading_rules=rules)
+        e.set_benchmark(idx_nav, idx_dates)
+        sharpe = float(e.stats["夏普比率"])
+        results.append((sharpe, lb, hd, ...))
+results.sort(key=lambda x: -x[0])
+```
+
+S35 tuning example (N-day low × hold days):
+
+```
+Best: L5H15 → excess Sharpe 0.71, ann 15.4%, dd -48.5%
+  2nd: L5H10 → excess Sharpe 0.68, ann 17.4%, dd -47.7%
+  3rd: L5H8  → excess Sharpe 0.67, ann 21.0%, dd -47.6%
+```
+
+Pattern: shorter lookback (L=5) = more signals + smoother equity curve; longer hold (H=15) = bounce fully materialized. Longer lookbacks (L=20+) create rare signals → concentration blowups (-90%+ DD).
 
 ### Basic: Level & Return Filters
 
@@ -312,6 +383,8 @@ RSI < 30 strategies produce extreme and deceptive returns. Root cause:
 The return is technically real (the strategy picks good bounces) but the 82% max drawdown means one wrong week wipes it out. S09 implementation fixes: threshold RSI < 25 (not 30) + minimum 80 stocks per signal week (skip weeks with fewer). Without `MIN_EFFECTIVE` guard in the engine (see above), same feedback loop can affect any strategy with very few effective signals.
 
 ### Full Signal Catalog by Technique
+
+*Note: S11-S36 strategies below exist as code (`s11_*.py` ~ `s36_*.py`) but have NOT been backtested yet. The signal code examples are proven design patterns ready for `generate_signal()` use.*
 
 #### Level & Return Filters (S25, S26, S27, S28)
 
@@ -399,18 +472,24 @@ for t in range(60, close.shape[1]):
     signal[:, t] = (sharpe <= thr)
 ```
 
-### Volatility
+### RSI (Relative Strength Index)
 
 ```python
-for t in range(window, close.shape[1]):
-    c = ret[:, t-window+1:t+1]
-    gain = np.where(c > 0, c, 0); loss = np.where(c < 0, -c, 0)
-    avg_gain = np.nanmean(gain, axis=1); avg_loss = np.nanmean(loss, axis=1)
-    rs = np.divide(avg_gain, avg_loss, out=np.zeros_like(avg_gain), where=avg_loss > 0)
-    rsi[:, t] = 100 - 100 / (1 + rs)
+def _rsi(close, w=14):
+    rsi = np.zeros_like(close)
+    ret = np.zeros_like(close)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        ret[:, 1:] = np.where(close[:, :-1] > 0, close[:, 1:] / close[:, :-1] - 1.0, 0.0)
+    for t in range(w, close.shape[1]):
+        c = ret[:, t-w+1:t+1]
+        gain = np.where(c > 0, c, 0); loss = np.where(c < 0, -c, 0)
+        avg_gain = np.nanmean(gain, axis=1); avg_loss = np.nanmean(loss, axis=1)
+        rs = np.divide(avg_gain, avg_loss, out=np.zeros_like(avg_gain), where=avg_loss > 0)
+        rsi[:, t] = 100 - 100 / (1 + rs)
+    return rsi
 ```
 
-### Volatility
+### Volatility (Rolling Standard Deviation)
 
 ```python
 for t in range(window, close.shape[1]):
@@ -489,9 +568,34 @@ Even after `np.where(valid, value, 0)`, if `close` contains NaN, `0.0 × NaN = N
 
 Track `capital_deployed` flag and `has_cash` balance. Wait for first signal day, then deploy from cash.
 
-### 3. Clear/re-deploy cash cycle
+### 3. Clear/re-deploy cash cycle with `capital_deployed` flag
 
 After clearing on a non-signal day, save cash in `has_cash`. On re-deploy, use `has_cash`, NOT `initial_capital` (which would reset P&L).
+
+**Critical sub-case**: If your BacktestEngine tracks a `capital_deployed` flag to skip initial deploy on subsequent days, it MUST be reset to `False` when all positions are cleared to cash. Without this reset:
+
+```python
+# Day 5: signal fires → capital_deployed = True
+# Day 6-9: no signals → clear positions, has_cash = total
+#   BUG: capital_deployed stays True
+# Day 10: signal fires again
+#   capital_deployed=True → skip deploy from has_cash
+#   "total" at this point may not include has_cash
+#   → target_amt = 0 for all stocks → all-zero portfolio
+```
+
+Fix: in the clear-to-cash path, always set `capital_deployed = False`.
+
+```python
+if n_sig == 0:
+    has_cash = total = (positions * close[:, t]).sum()
+    positions[:] = 0
+    pv[t] = has_cash
+    capital_deployed = False  # ← MUST reset
+    continue
+```
+
+This is especially important for **weekly strategies** where signal gaps of 2-5 days are common, and the first signal may not appear until day 5+ (e.g. first Monday of data range).
 
 ### 4. RSI oversold / small-signal strategy blowup
 

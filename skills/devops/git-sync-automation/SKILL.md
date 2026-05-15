@@ -203,40 +203,51 @@ When the user prefers OS-native scheduling, migrate Hermes cron jobs to Windows 
 
 ### Step 1: Create a .bat script
 
-Place a batch file alongside the repo. For push-only (backup):
+Place a batch file alongside the repo. Use `findstr` + `errorlevel` to check for changes — `set /p`
+with file redirection is fragile on Chinese-locale Windows where `%date%` and `%time%` contain
+Unicode characters that break string comparison.
+
+**IMPORTANT:** Write the `.bat` file via Python `open().write()` inside `execute_code`, not via
+`terminal` + `echo >>` in bash — MSYS escaping of redirect operators (`>`, `&`) and batch
+syntax (`%%`) produces corrupted files. Python's file I/O is the only reliable path.
+
+For push-only (backup):
 
 ```batch
 @echo off
-REM Daily git push for <repo_name>
+REM chcp 65001 needed on Chinese-locale Windows to handle %date%/%time% Unicode
+chcp 65001 >nul 2>&1
 cd /d "C:\Users\<user>\Desktop\<repo>"
 
-REM Check for changes — exit silently if none
-git status --porcelain > "%TEMP%\git_status.tmp"
-set /p STATUS=<"%TEMP%\git_status.tmp"
-if "%STATUS%"=="" del "%TEMP%\git_status.tmp" & exit /b 0
-del "%TEMP%\git_status.tmp"
+REM Check for changes — exit silently if none (findstr is more reliable than set /p)
+git status --porcelain > "%TEMP%\gs.tmp"
+findstr . "%TEMP%\gs.tmp" >nul
+if %errorlevel% neq 0 (
+    del "%TEMP%\gs.tmp" 2>nul
+    exit /b 0
+)
+del "%TEMP%\gs.tmp" 2>nul
 
 git add -A
 git commit -m "auto backup %date%"
 git push origin main
-
-echo Auto-push completed at %date% %time%
 ```
 
 For bidirectional sync (pull+rebase+push):
 
 ```batch
 @echo off
+chcp 65001 >nul 2>&1
 cd /d "C:\Users\<user>\Desktop\<repo>"
 
 REM 1. Commit local changes
-git status --porcelain > "%TEMP%\git_status.tmp"
-set /p STATUS=<"%TEMP%\git_status.tmp"
-del "%TEMP%\git_status.tmp"
-if not "%STATUS%"=="" (
+git status --porcelain > "%TEMP%\gs.tmp"
+findstr . "%TEMP%\gs.tmp" >nul
+if %errorlevel% equ 0 (
     git add -A
     git commit -m "auto-sync %date%"
 )
+del "%TEMP%\gs.tmp" 2>nul
 
 REM 2. Pull remote changes (try main, fallback master)
 git pull --rebase origin main 2>nul
@@ -252,35 +263,37 @@ if %errorlevel% neq 0 (
     echo PUSH FAILED
     exit /b 1
 )
-echo Sync completed at %date% %time%
+```
+
+### Pre-bake step (copy before git)
+
+When the sync source isn't a working directory but config/skills/dotfiles that live
+elsewhere on the filesystem, add a copy step before the git operations:
+
+```batch
+@echo off
+chcp 65001 >nul 2>&1
+set SRC=C:\Path\To\Configs
+set REPO=C:\Users\<user>\Desktop\<repo>
+
+REM 1. Snapshot the source files
+xcopy /e /i /q "%SRC%" "%REPO%\" >nul 2>&1
+
+REM 2. Git operations (same pattern as above)
+cd /d "%REPO%"
+git status --porcelain > "%TEMP%\gs.tmp"
+findstr . "%TEMP%\gs.tmp" >nul
+if %errorlevel% neq 0 (
+    del "%TEMP%\gs.tmp" 2>nul
+    exit /b 0
+)
+del "%TEMP%\gs.tmp" 2>nul
+git add -A
+git commit -m "auto snapshot %date%"
+git push origin main
 ```
 
 ### Step 2: Register via schtasks
-
-**⚠️ CRITICAL: Use Python subprocess, not MSYS bash.**
-
-In MSYS git-bash, `schtasks /create /tn "【中文】任务名" ...` fails because the shell mangles Chinese characters and path separators. The shell converts `C:\Users` to `/c/Users` which schtasks rejects.
-
-**Fix**: Run the command through Python subprocess with native Windows paths:
-
-```python
-import subprocess
-
-cmd = [
-    "schtasks", "/create",
-    "/tn", "【地点】仓库名 功能 频率",    # e.g. 【家中】a_stock_trade git同步 每日
-    "/tr", "cmd /c C:\\Users\\<user>\\Desktop\\<repo>\\script.bat",
-    "/sc", "daily",
-    "/st", "21:00",                      # HH:MM 24h format
-    "/f"                                  # force overwrite
-]
-r = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
-print(r.stdout)  # "SUCCESS: The scheduled task ... has been created."
-```
-
-Do NOT use MSYS bash to invoke schtasks with Chinese characters in the task name — it will silently parse the path incorrectly.
-
-Alternatively, create a temporary .bat file on the desktop with the schtasks command and run it from cmd.exe (avoiding MSYS path translation). But even then, Chinese characters in the task name may cause issues. Python subprocess is the most reliable method.
 
 **⚠️ CRITICAL: Use Python subprocess, not MSYS bash.**
 
@@ -346,3 +359,6 @@ git status --short
 ## Reference
 
 See `scripts/sync-template.sh` for the exact script template used in this skill.
+
+See `references/hermes-skills-backup-to-github.md` for a complete worked example:
+backing up Hermes skills/config/profiles to GitHub with daily Windows Task Scheduler.

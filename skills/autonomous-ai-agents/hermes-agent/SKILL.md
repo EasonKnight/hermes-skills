@@ -354,6 +354,21 @@ $HERMES_HOME/skills/        Installed skills
 
 Profiles use `~/.hermes/profiles/<name>/` with the same layout.
 
+### Migrating / Backing Up to Another Computer
+
+Copy these items to the new machine's `%LOCALAPPDATA%\hermes\`:
+
+| Item | Path relative to `%LOCALAPPDATA%\hermes\` |
+|------|-------------------------------------------|
+| Skills | `skills/` (all your installed skills) |
+| Config | `config.yaml` (model, tools, terminal settings) |
+| Profiles | `profiles/` (custom profiles with isolated config) |
+| API keys | `.env` (redact first if pushing to git) |
+
+For daily automated backup to GitHub, see the `git-sync-automation` skill's
+`references/hermes-skills-backup-to-github.md` for a complete worked example
+with Windows Task Scheduler.
+
 ### Config Sections
 
 Edit with `hermes config edit` or `hermes config set section.key value`.
