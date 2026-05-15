@@ -1,0 +1,1 @@
+Native Chinese speaker. Gamer: plays Dota 2 and Diablo 4 on Windows 11 desktop. Appreciates organized, practical responses with clear formatting. Technical enough for detailed explanations. Likes self-contained tools (HTML games, CLI tools). Communicates in Chinese — respond in Chinese unless asked otherwise.

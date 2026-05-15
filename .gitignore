@@ -1,0 +1,8 @@
+.env
+sessions/
+logs/
+.usage.json
+.curator_state
+.curator_state.lock
+.bundled_manifest
+copy_files.bat
