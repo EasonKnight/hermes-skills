@@ -1,7 +1,7 @@
 ---
 name: a-share-strategy-development
 description: "A股量化策略全流程开发。基于backtest_utils共享模块，每个策略只需编写generate_signal()函数返回bool信号矩阵。"
-version: 2.0.0
+version: 2.3.0
 author: Hermes Agent
 license: MIT
 metadata:
@@ -33,16 +33,30 @@ metadata:
 每次研发新策略前，必须先回顾已有策略列表，确保新思路**不重复、不相似、低相关**。优先探索完全不同的因子：资金流、基本面、宏观、事件驱动、行业轮动、跨品种。
 
 **已有策略库速查（Alpha模式 A200+ / 信号模式 S*）**：
-| 类别 | 策略 | 核心逻辑 |
-|------|------|----------|
-| **Alpha - 低波** 🏆 | **A202** | **-rank(std_60d) 年化12.31%** |
-| Alpha - 动量 | A200 | rank(ret_20d) 年化7.31% |
-| Alpha - 反转 | A201 | -rank(ret_5d) 年化7.49% |
-| Alpha - 量价动量 | A203 | rank(ret×amt_ratio) 年化7.75% |
+| 类别 | 策略 | 核心逻辑 | DECAY | 换手 |
+|------|------|----------|:---:|:---:|
+| **Alpha - VWAP背离** 🏆 | **A208** | Δvwap×-Δclose 年化16.95% | 18 | 9.94% |
+| **Alpha - 低波** 🏆 | **A202** | -rank(std_60d) 年化12.71% | 5 | 4.04% |
+| **Alpha - 下行保护** | **A210** | 下行风险+质量 年化14.24% | 0.7 | 6.05% |
+| Alpha - 动量 ❌ | A200 | rank(ret_20d) 因子噪声 | 20 | 10.85% |
+| Alpha - 反转 ❌ | A201 | -rank(ret_5d) 因子噪声 | 20 | 15.31% |
+| Alpha - 量价动量 ❌ | A203 | rank(ret×amt_ratio) 因子噪声 | 20 | 10.96% |
+| Alpha - 量价背离 ❌ | A204 | Δvol×-Δclose 因子噪声 | 20 | 15.99% |
+| Alpha - 开量相关 ❌ | A205 | corr(open,vol) 因子噪声 | 20 | 13.56% |
 | 基线 | S01/S02 | 等权 |
 | 低价 | S66/S67/S78/S92 | 价格分位+排除极端/周频/月频 |
 | 动量+低波 | S76/S81/S82/S91 | 双频段/分层/低波动过滤 |
 | 等权增强 | S93/S121/S122/S124 | 双剔除/低动量剔除/流动性中段 |
+
+### 🧬 深度发散研发（效果好的策略 → 变形组合）
+当一个策略回测效果显著好（年化>15%且夏普>0.4且换手<10%），触发「深度发散」模式：
+1. **分析因子**：理解原策略因子逻辑（如 Amihud ILQ = mean(|ret|/amt, N)）
+2. **变形**：改参数（窗口、频率、rank方式）
+3. **组合**：与其他因子加权混合（动量、低波、反转、成交量过滤）
+4. **切换频率**：周频→月频，或反过来
+5. 一次性写 5-8 个变异策略，批量回测
+6. 对效果好的变异继续下一轮发散（递归深入）
+目标是围绕一个有效因子展开系统性探索，榨干其 alpha 潜力。
 
 ### 自主迭代
 全自动化、自主决策，不询问。流程：写一批(3-5个)→**逐个跑**（`python strategies/aXXX.py`，不动 `_summary.csv`）→自主裁决(年化>15%且夏普>0.4保留，负收益/选股<10只删)→汇报成果。
@@ -84,8 +98,24 @@ metadata:
 | 12 | S105 低价正向动量月频 | 10.56% | -0.09 | 0.70 | -44.22% | 5.09% |
 | — | (等权周频基准) | ~11.55% | — | — | — | — |
 
-### ⚠️ app.pyw 常见陷阱（汇总）
-### ⚠️ 策略扫描坑（2026-05-16修复）
+### ⚠️ 策略文件 glob 冲突坑
+批量运行 `python strategies/a213_*.py` 时，shell glob 会匹配**所有**以 `a213_` 开头的文件。如果旧 session 遗留了 `a213_amihud_lowvol_weekly.py`，新创建的 `a213_illiq_momentum_weekly.py` 也会被匹配，导致两个策略都被运行、结果混淆。
+
+**规范**：新建策略前先 `ls strategies/aXXX_*` 检查编号是否已被占用。遇到冲突时递增编号避开（如 A213→A219）。
+
+### ⚠️ pycache 污染导致平台子进程崩溃
+`core/platform.py` 的 `run_one()` 使用 `subprocess.run([sys.executable, filepath])` 子进程运行策略。如果 `core/backtest_utils.py` 修改过但 `__pycache__` 未清理，子进程可能加载旧 `.pyc` 导致 SyntaxError（尤其 try/except 块修改后）。
+
+**修复**：改完核心模块后，跑全量前务必清 pycache：
+```bash
+find . -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null
+find . -name "*.pyc" -delete 2>/dev/null
+```
+
+### ⚠️ 幽灵结果目录
+策略 .py 文件被删除但 results/ 目录仍在时，`_summary.csv` 中会保留旧结果。平台只扫描 `.py` 文件决定运行哪些策略，但排名输出从 CSV 读取。导致已删除的策略仍出现在排名中。
+
+**规范**：删除策略时同步删除其 results 目录和 _summary.csv 中对应行。定期 `python -m core.platform run` 全量更新。
 `app.pyw` 的 `scan_strategies()` 和 `core/platform.py` 的 `discover()` 都必须直接扫 `strategies/*.py`，**禁止按文件名前缀过滤**（如 `s[0-9]*` 或 `a[0-9]*`）。否则新前缀命名的策略会被忽略。
 
 正确写法：
@@ -154,13 +184,36 @@ folder = m2.group(1) if m2 else os.path.splitext(os.path.basename(src_path))[0]
 - **超额用固定基准NAV比百分比基准** → pv>1亿时放大超额。修复：超额统一用百分比收益 `pct_ret[t] = pv[t]/pv[t-1]-1` 计算 `excess_nav = 1 + strat_pct_nav - bm_nav`。
 - 详见 `references/negative-cash-fix-2026-05.md`。
 
+### DECAY 调优工作流（换手率铁律）
+
+**换手率必须控制在 10% 以内**。新策略回测后若换手 > 10%，必须调高 DECAY。
+
+**迭代流程**：
+1. 初始 DECAY=5 跑回测
+2. 读 `stats.csv` 中 `日均换手`
+3. 若换手 > 10%：调高 DECAY（+2~+5，视超标幅度），重跑回测
+4. 重复直到换手 ≤ 10% 或 DECAY 触及 20 上限
+5. DECAY=20 仍换手 > 10% → **因子本身噪声太大，换因子，不继续加 DECAY**
+
+**DECAY 调整经验法则**（周频 CSI1000）：
+| 初始换手 | 首轮 DECAY 建议 | 说明 |
+|:---:|:---:|------|
+| 10~15% | +2~4 (→7~9) | 轻度超标，小幅加窗 |
+| 15~20% | +5~7 (→10~12) | 中度超标 |
+| 20~30% | +8~10 (→13~15) | 严重超标，可能靠近上限 |
+| >30% | 直接试 DECAY=15~20 | 大概率命中上限 |
+
+**DECAY→换手衰减规律**（实测）：非严格线性，换手 ∝ 1/DECAY^k，k 在 0.16~0.46 间因策略而异。平均每 +3 DECAY 换手降 2~4 个百分点，后期边际递减。详细调参日志见 `references/decay-tuning-2026-05.md`。
+
+**DECAY 上限 20**：超过 20 信号滞后严重（20 天窗口平滑几乎抹去所有短期信号），且换手不再显著下降（边际递减至零）。命中上限的策略说明因子概念失败——alpha 信号波动太大无法通过平滑修复，需重构因子公式。
+
 ### 研发检查清单
 - [ ] 使用 alpha 模式（`generate_alpha()` + `BacktestEngine(alpha_mode=True)`）
 - [ ] 使用 `DECAY` 平滑（正整数窗口天数，默认 5）
 - [ ] 日均选股 ≥ 30只（否则不稳定）
 - [ ] 年化 > 5%（否则无效）
 - [ ] 回撤 > -50%（否则风险过高）
-- [ ] 换手 < 15%（decay 控制），检验：`日均换手 < 15%`
+- [ ] 换手 < 10%（通过 DECAY 调优达到），检验：`日均换手 < 10%`
 - [ ] 与已有策略逻辑不重复
 - [ ] 超额为正（跑赢等权周频基准）才有保留价值
 
@@ -205,6 +258,13 @@ from core.alpha_utils import (
     correlation, covariance,               # 滚动相关系数
     signedpower, scale, rank_pct,          # 截面/数学运算
     alpha101_001, alpha101_003, alpha101_012,  # Alpha101 示例因子
+    overnight_ret, alpha_overnight,        # 隔夜收益（机构意图）
+    amihud_illiq, alpha_amihud,            # 非流动性溢价（Amihud测度）
+    skewness, kurtosis, alpha_skewness,    # 高阶矩（偏度/峰度）
+    downside_vol, upside_potential, alpha_gain_loss,  # 下行风险/收益质量
+    trend_efficiency, alpha_trend_efficiency,         # 趋势效率(已验证无效)
+    multi_horizon_efficiency, alpha_multi_efficiency, # 多周期效率(已验证无效)
+    up_volume_ratio, volume_confirmed_trend,          # 量价确认(已验证无效)
 )
 # 注意：alpha_smooth 已废弃，统一使用 decay_linear
 ```
@@ -251,19 +311,37 @@ engine.run(close, alpha_scores, dates, trading_rules=rules, valid=valid)
 - 权重 = 正分归一化（分数越高权重越大）
 - `alpha_top_pct` 参数可限制仅取前N%
 
-**已有Alpha策略（CSI1000周频，decay_linear=5）**：
-| 策略 | 因子 | 年化 | 回撤 | 换手 |
-|:----|:----|:---:|:---:|:---:|
-| A208 VWAP背离Alpha 🏆 |  Δvwap×-Δclose | 14.50% | -23.20% | 19.36% |
-| A202 低波Alpha 🏆 | -vol_60d | 12.71% | -18.05% | 4.04% |
-| A201 反转Alpha | -ret_5d | — | — | — |
-| A203 成交额动量 | ret×amt_ratio | — | — | — |
-| A200 动量Alpha | ret_20d | — | — | — |
+**已有Alpha策略（CSI1000周频，终态DECAY）**：
+| 策略 | 因子 | 年化 | 回撤 | 换手 | DECAY |
+|:----|:----|:---:|:---:|:---:|:---:|
+| **A219 ILQ 40d 🏆🏆🏆** | rank(Amihud_40d) | **24.82%** | -15.27% | 5.21% | **5** |
+| **A212 非流动性溢价 🏆🏆** | rank(Amihud_N20d) | **22.78%** | -16.84% | 6.98% | **5** |
+| **A215 非流动性溢价月频 🏆🏆** | rank(Amihud_N20d)月频 | **22.59%** | -15.82% | 5.77% | **5** |
+| **A213 Amihud低波组合 🏆** | rank(amihud/vol_60d) | **19.46%** | -16.11% | 5.56% | **5** |
+| A208 VWAP背离Alpha 🏆 | Δvwap×-Δclose | 16.95% | -21.75% | 9.94% | 18 |
+| A210 下行保护Alpha | 下行风险+质量 | 14.24% | -30.70% | 6.05% | 0.7 |
+| A202 低波Alpha 🏆 | -vol_60d | 12.71% | -18.05% | 4.04% | 5 |
+| A200 动量Alpha ❌ | ret_20d | 8.01% | -38.07% | 10.85% | 20★ |
+| A203 成交额动量 ❌ | ret×amt_ratio | 8.02% | -38.10% | 10.96% | 20★ |
+| A201 反转Alpha ❌ | -ret_5d | 10.09% | -39.89% | 15.31% | 20★ |
+| A204 量价背离 ❌ | Δvol×-Δclose | 12.03% | -31.16% | 15.99% | 20★ |
+| A205 开量相关 ❌ | corr(open,vol) | 12.72% | -28.79% | 13.56% | 20★ |
+| A227 日内强度 ❌ | (close-open)/(high-low) | -1.57% | -57.52% | 21.98% | — |
+| A228 量价趋势一致 ❌ | corr(close,vol,15)*ret_10d | 1.50% | -51.06% | 18.56% | — |
+| A229 波动调整反转 ❌ | -ret_5d/vol_20d | 3.81% | -55.37% | 24.27% | — |
+| A230 趋势效率 ❌ | ret_20d/vol_20d | 2.82% | -54.23% | 12.73% | 5★ |
+| A231 多周期效率 ❌ | mean(eff_10,20,40) | 3.04% | -51.85% | 12.17% | 5★ |
+| A232 量价确认趋势 ❌ | ret*(up_vol_ratio-0.5) | 4.36% | -50.00% | 16.95% | 5★ |
+
+**已试但完全无效的方向（13个）**：A220隔夜/A221偏度/A222乖离/A223收益/A224波动压缩/A225流动性/A226收益不对称/A227日内强度/A228量价趋势一致/A229波动调整反转/A230趋势效率(ret_20d/vol_20d,2.82%)/A231多周期效率(3.04%)/A232量价确认趋势(4.36%)。全部跑输等权基准。CSI1000等权10年+176%，跑赢极难。
+
+★ DECAY=20仍换手>10%：因子噪声大，需换因子而非继续加窗。
 
 **`decay_linear` 用法**：`decay_linear(hist, t, window)` 对 `hist` 第 t 天往前 `window` 天的数据做线性加权平均，权重 `1,2,...,window`（今天权重最高）。用在 `generate_alpha` 中平滑原始因子值后再 `zscore_rank`，降低噪声减少换手。
 - `DECAY=5`：5天窗口（默认）
-- 窗口太小(<3)则平滑不足；太大(>20)则信号滞后
-- 不需要再维护 `alpha_smooth`，已被 `decay_linear` 替代
+- 窗口太小(<3)则平滑不足；太大(>20)则信号滞后且边际递减
+- 换手超标时按「DECAY 调优工作流」迭代增加至达标或触及上限
+- `alpha_smooth` 已废弃，统一切换到 `decay_linear`
 
 ### app.pyw `_parse_label` 大小写坑\n见 `references/app-parse-label-regex-2026-05.md`。新旧策略文件的元数据变量名不同（旧用 `label=`/`folder=` 小写，新用 `LABEL=`/`FOLDER=` 大写），`_parse_label` 的正则必须同时匹配两者，否则app扫不到结果。
 
@@ -279,6 +357,18 @@ engine.run(close, alpha_scores, dates, trading_rules=rules, valid=valid)
 - 子图2替代了原来的回撤折线图（已移除）
 - 所有超额均使用差值法 `1 + nav - benchmark`，而非比值法
 - 中证1000指数数据通过akshare下载，失败时显示"数据不可用"
+- **top spine 必须显式隐藏**：`ax.spines["top"].set_visible(False)` 在 `for spine in ax.spines.values()` 之前。暗色背景下 matplotlib 部分版本会意外渲染顶部脊线，在策略名称区域产生多余横线
+
+### ⚠️ 图表 spine 坑（暗色主题）
+`Visualizer.plot_and_save` 使用暗色主题，`plt.subplots()` 默认隐藏 top spine，但遍历 `ax.spines.values()` 设置颜色时，某些 matplotlib 版本会意外激活已隐藏的 top spine，在标题区域产生一条"奇怪的横线"。
+
+修复：在遍历 spine 设置颜色之前，先显式关闭 top spine：
+```python
+for ax in axes:
+    ax.spines["top"].set_visible(False)  # ★ 先关掉
+    for spine in ax.spines.values():
+        spine.set_color(BG_LINE)
+```
 
 ### 比较基准（引擎自动计算）
 **`BacktestEngine.run()` 末尾自动调用 `_compute_benchmark(close, dates)`**，不再需要手动调用 `IndexLoader.load()` + `set_benchmark()`。
@@ -321,8 +411,10 @@ engine.run(close, signal, dates, trading_rules=rules, valid=valid)
   - POOL = "csi1000"
 - `core/platform.py` 已清理 `IndexLoader` 导入，支持标签筛选
 - `weekly_filter` / `monthly_filter` 在 core/backtest_utils.py
-- Windows路径避开 `<>:"/\|?*` 字符
-- 用户名 `Mayn`，`USERPROFILE` 环境变量经常被污染
+- DataLoader 现支持 ld.high / ld.low 加载到npz缓存，策略可通过 generate_alpha(..., high=ld.high, low=ld.low) 使用
+- npz缓存损坏时自动fallback到CSV重新加载（try/except np.load）
+- Windows路径避开尖括号/冒号/双引号/斜杠等字符
+- 用户名 Mayn，USERPROFILE 环境变量经常被污染
 - Windows 平台要点见 `references/windows-pitfalls-2026-05.md`
 - 涨跌停用0.5%容差(float32精度问题)\n- 固定基准(1亿) + 复利年化计算 `(1+total_ret)^(1/years)-1`\n- 用户是Windows中文用户，USERPROFILE环境变量被污染，需 `USERPROFILE="C:\\Users\\Mayn"` 前缀运行
 

@@ -119,6 +119,7 @@ akshare 通过 East Money 接口获取数据，支持多进程全市场下载。
 ## References
 
 - `references/akshare-multiprocess-download.md` — 多进程全市场下载方案
+- `references/incremental-update-data.md` — 增量更新方案（按个股最新日期精确过滤）
 - `references/limit-price-data-sources.md` — 涨跌停价格数据源对比：akshare 无 high_limit/low_limit 字段，各方案优劣，手动计算规则与精度要求
 
 **为什么要多进程**：akshare 内部用 `py_mini_racer` 解析 East Money 的 JS 接口，多线程/单进程多 worker 会导致崩溃。解决方案是 **spawn 模式的多进程**，每个 worker 独立加载 akshare。
@@ -153,11 +154,91 @@ After downloading data, see the `a-stock-backtesting` skill for vectorized
 strategy evaluation patterns (signal generation, portfolio simulation, cost
 accounting, visualization).
 
+## 增量数据更新
+
+`core/update_data.py` 是 `download_data.py` 的增量版，追加而非全量重下：
+
+```bash
+cd ~/Desktop/a_stock_trade
+python core/update_data.py          # 快速预检+增量更新
+python core/update_data.py --force 20260501  # 强制从指定日期重下（跳过预检）
+```
+
+**快速预检**：程序先根据当前日期判断最后一个交易日（周六日→周五，工作日→当日），与 CSV 全局最新日期对比。如果已对齐则立即退出（0 秒），无需扫描 5200 只股票。
+
+**核心机制 — 按个股最新日期精确过滤**：
+- 读取 CSV 构建 `{6位字符串股票代码: 最新日期}` 字典
+- 每只股票独立过滤：只保留 `date > 该股自己的最新日期` 的行
+- 解决三个问题：
+  1. **无重复**：每只股票只加自己没有的行
+  2. **停牌后复牌**：即使某股最后日期早于全局日期，也能正确补上缺失的行
+  3. **新股**：不在字典中的股票（新股），保留 akshare 返回的全部数据
+
+**类型一致性**（易错点）：
+- CSV 中 `股票代码` 是 `int64`（如 `45`），而 akshare 返回的是 6 位字符串 `"000045"`
+- `stock_latest.get(code)` 如果不转型会永远返回 `None`，导致所有股票被当成"新股"，数据全部通过过滤 → **大量重复写入**
+- 必须统一转成 `f"{int(x):06d}"` 6 位字符串后再作为字典 key
+
+### 断点续传（改进版）
+
+- 进度只在实际写入 CSV **之后**才记录，而非写入 buffer 时
+- 中断重跑：已写数据通过 `_update_progress.txt` 跳过，未写数据重新下载
+- 强制模式忽略进度文件，确保全量重新下载
+
+### 与 download_data.py 的关键区别
+
+| 方面 | download_data.py | update_data.py |
+|------|-----------------|----------------|
+| 起始日期 | today - 10年 | CSV 最新日期 |
+| 过滤粒度 | 无过滤（全量写入） | 按个股最新日期精确过滤 |
+| 断点写入时机 | save_progress 在 buffer 后 | save_batch_progress 在 flush 后 |
+| 强制模式 | 无 | `--force YYYYMMDD` 跳过预检+忽略进度 |
+| 首次运行检查 | 不存在就创建 | 不存在报错提醒先跑 download_data.py |
+
+## 路径冲突坑
+
+### Pitfall: core/platform.py 与 stdlib platform 冲突
+
+`core/platform.py` 内部 `import pandas as pd`，而 pandas 自身依赖 `import platform`（stdlib）。
+当运行 `python core/<script>.py` 时，`core/` 被加入 `sys.path[0]`，pandas 加载过程中
+`import platform` 找到 `core/platform.py` → 循环引用崩溃。
+
+**修复**：在脚本最开头移除 `sys.path[0]`：
+
+```python
+import os, sys
+_script_dir = os.path.dirname(os.path.abspath(__file__))
+if sys.path and sys.path[0] == _script_dir:
+    sys.path.pop(0)
+
+import pandas as pd  # 现在安全了
+```
+
+这个修复已内置到 `core/update_data.py`，如果其他 `core/` 脚本遇到类似问题应同样处理。
+
+### Pitfall: CSV 编码损坏
+
+`errors='replace'` 替换损坏编码后，日期列可能混入数值（如 `"10.74"`），导致 `pd.to_datetime()` 崩溃。
+
+**修复**：读取后先用 `df["date"].str.match(r"^\d{4}-\d{2}-\d{2}$")` 过滤无效日期行，再转 datetime。
+
+### Pitfall: USERPROFILE 污染
+
+Windows 上如果环境变量 `USERPROFILE` 被污染（如被 MSYS 覆盖），
+`os.path.expanduser("~/...")` 会解析到错误路径，导致 `DataLoader` 找不到数据文件。
+
+**修复**：在终端命令前加 `USERPROFILE="C:\\Users\\Mayn"`：
+```bash
+USERPROFILE="C:\\Users\\Mayn" python run_all.py
+```
+
+或者在脚本内用 `pathlib.Path.home()` 替代 `os.path.expanduser()`。
+
 ## Path Resolution on Windows (MSYS/Git Bash)
 
 When using `os.path.expanduser("~/Desktop/...")` inside MSYS git-bash, `~`
-resolves to `C:\Users\<username>` correctly, but the resulting path may have
-mixed slashes (`C:\Users\Mayn/Desktop/a_stock_data/...`). This can cause
+resolves to `C:\\Users\\<username>` correctly, but the resulting path may have
+mixed slashes (`C:\\Users\\Mayn/Desktop/a_stock_data/...`). This can cause
 subtle failures in downstream scripts.
 
 **Best practice**: use `pathlib` and resolve explicitly:
