@@ -105,3 +105,87 @@ mv platform.py gen_platform.py
 
 策略目录下的 `.py` 文件不要使用 Python 标准库模块名：
 os, sys, time, math, json, csv, re, pathlib, platform, io, base64, subprocess, datetime, random, itertools, collections, typing, etc.
+
+---
+
+# S21 has_cash 双重计数排查（2026-05-15）
+
+## 现象
+
+S21 超跌5日周频，总收益 **155,310%**，交易成本 **20,329%**，最终市值 ¥1,554亿。
+
+## 排查步骤
+
+### 第一步：看日收益 TOP10
+
+```
+2026-01-23  +7,323%  PV 1,725亿   持仓 113 只
+2024-09-30  +6,222%  PV   655亿   持仓   2 只
+```
+
+单日 7000% 收益明显异常。固定基准下日收益 = P&L/1亿，PV 跳跃证明组合价值在爆炸式增长。
+
+### 第二步：看 PV 演变（2024-09~10 关键期）
+
+```
+09-27 PV 593亿  持仓 19   (周五)
+09-30 PV 655亿  持仓  2   (周一 ⚡ 信号切换：19→2只)
+10-08 PV 713亿  持仓  2   (节后，2只股票涨幅有限但 PV 继续涨)
+```
+
+核心异常：**19只→2只时，组合价值从593亿跃升到655亿，且持仓不变时PV仍在增长**。
+
+### 第三步：根因追踪
+
+`BacktestEngine.run()` 正常再平衡逻辑：
+
+```python
+total = has_cash + cur_mv         # 当前总市值
+target_amt = total / n_effective   # 按总市值均分
+```
+
+当信号从 19 只切换到 2 只时：
+1. total = 655亿
+2. target_amt = 655亿/2 = 327亿/只
+3. 仓位上限 10%：每只最多 655亿×10% = 65.5亿
+4. `excess_val = (327亿-65.5亿)×2 = 524亿`
+5. `has_cash += excess_val` → has_cash = 0 + 524亿 = 524亿
+
+第2天（10月8日）：
+1. cur_mv = 2只×现价 = 144亿
+2. total = 524亿 + 144亿 = 668亿
+3. target_amt = 668亿/2 = 334亿/只  
+4. 仓位上限：max_val = 668亿×10% = 66.8亿
+5. `excess_val = (334亿-66.8亿)×2 = 535亿`
+6. `has_cash += 535亿` → has_cash = 524亿+535亿 = **1,059亿**
+
+**`has_cash` 在 `total` 中已存在，又被 `excess_val` 加了一次！双重计数！**
+
+每日叠加 → PV 从 1亿爆发到千亿级别。
+
+### 第四步：修复（三处修改）
+
+**① 再平衡分配基准改为 `fixed_base`：**
+```python
+# before: target_amt = total / n_effective
+# after:  target_amt = self.fixed_base / n_effective
+```
+
+**② 仓位上限也基于 `fixed_base`：**
+```python
+# before: max_val_arr = np.full(n_stocks, total * max_position_pct)
+# after:  max_val_arr = np.full(n_stocks, self.fixed_base * max_position_pct)
+```
+
+**③ 添加再平衡 P&L 追踪：**
+```python
+net_pnl = np.sum(cur_pos) - np.sum(new_pos)
+has_cash += net_pnl
+```
+
+### 修复后结果
+
+| 策略 | 修复前 | 修复后 |
+|------|--------|--------|
+| S21 超跌5日周频 | +155,310% | +15.50%（成本73%≈盈亏平衡）|
+| S01 等权日频 | +134% → +0.13% → +101% | 加上P&L追踪后回到+101%（市场收益-成本）|

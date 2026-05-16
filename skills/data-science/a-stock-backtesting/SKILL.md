@@ -6,7 +6,7 @@ trigger: user asks to backtest, backtest,回测, run strategy on A-share data, e
 tags: [finance, stocks, a-share, backtesting, quantitative, numpy, pandas]
 ---
 
-> ⚠️ **合并说明**：本技能已与 `a-share-strategy-development` 合并。`a-share-strategy-development` 包含最新项目结构（`core/` + `strategies/` 子目录）、完整 import 路径、以及 30 策略全量排名。本技能保留旧扁平结构引用，仅做历史参考。
+> ⚠️ **已合并到 `a-share-strategy-development`**。该技能包含最新项目结构（`core/` + `strategies/` 子目录）、完整的 import 路径（`from core.backtest_utils import ...`）、30 策略全量排名、固定基准分配（无 has_cash 双重计数）、涨跌停双向拦截、暗色主题图表。本技能保留旧版参考，实际开发请用 `a-share-strategy-development`。
 
 ## Data Prerequisites
 
@@ -125,16 +125,21 @@ engine.run(close, signal, dates, trading_rules=rules)
 
 Detection: `names.str.contains("ST|退|PT", na=False)`
 
-### Limit Hit Detection — Exact Match Only
+### Limit Hit Detection — 0.5% Tolerance Required (float32 Precision Fix 2026-05-15)
 
 ```python
 limit_up   = round(prev_close * (1 + limit_pct), 2)
 limit_down = round(prev_close * (1 - limit_pct), 2)
-is_limit_up   = (close[t] == limit_up) & ~suspended
-is_limit_down = (close[t] == limit_down) & ~suspended
+# Must use tolerance — see explanation below
+is_limit_up   = (close[t] >= limit_up * 0.995) & ~suspended
+is_limit_down = (close[t] <= limit_down * 1.005) & ~suspended
 ```
 
-**CRITICAL**: Use exact `==`. Even 0.2% tolerance catches stocks at 8-9% up (not at limit), causing massive portfolio distortion via concentration in falsely-blocked stocks. Prices from akshare are rounded to fen.
+**CRITICAL (2026-05-15 fix)**: Do NOT use exact `==`. The `close` array is float32 (loaded from CSV with `dtype="float32"`) while `limit_up`/`limit_down` are float64 (from `np.round(prev * 1.10, 2)`). Exact `==` comparison between float32 and float64 fails due to precision — e.g. `float32(14.26) → 14.260000228881836`, which never equals `float64(14.26)`. This caused **~99% of limit-up cases to be missed** (2,529 vs 109,553 over the full dataset). Use `>= limit_up * 0.995` for limit-up and `<= limit_down * 1.005` for limit-down.
+
+**Impact of this fix**: All momentum/buy-the-top strategies that were buying limit-up stocks had inflated IRs that collapsed after the fix (S27 went from IR 1.11 to nan). Robust strategies (low-price, low-vol, equal-weight) were unaffected.
+
+See `a-share-strategy-development` references/limit-tolerance-fix-2026-05.md for full reproduction and verification scripts.
 
 ### Suspension Detection
 

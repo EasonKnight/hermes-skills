@@ -1,7 +1,7 @@
 ---
 name: a-share-strategy-development
-description: "A股量化策略全流程开发：回测框架、信号设计、参数调优、Bug排查。基于backtest_utils共享模块，每个策略只需编写generate_signal()函数返回bool信号矩阵。"
-version: 1.0.0
+description: "A股量化策略全流程开发。基于backtest_utils共享模块，每个策略只需编写generate_signal()函数返回bool信号矩阵。"
+version: 2.0.0
 author: Hermes Agent
 license: MIT
 metadata:
@@ -10,443 +10,355 @@ metadata:
     related_skills: [test-driven-development, systematic-debugging]
 ---
 
-# A股量化策略开发
+# A股量化策略开发（Alpha模式）
 
-## 框架结构
+## 研发铁律
 
+### 统一使用 Alpha 模式
+所有新策略研发**必须**使用 alpha 模式（float 得分矩阵），不得再使用旧的 bool 信号模式。
+不再编写 `generate_signal()` 函数，统一用 `generate_alpha()` 返回 z-score 归一化的得分矩阵。
+
+### ⚡ 研发速度铁律
+只要有了因子思路，直接写代码、直接跑回测，**不要**先写计划再问再执行。流程：
+1. 想出一个 Alpha101 风格公式（一行数学表达式）
+2. 用 `alpha_utils` 原语写成代码（不超过 5 行逻辑）
+3. 直接跑 `python strategies/aXXX.py`
+4. 看年化/回撤/换手三项指标裁决
+5. 下一个
+
+每批 3-5 个策略一起写，一起跑，不一个个来。中间不询问、不汇报、不写文档。
+失败的策略直接删文件+结果目录，只汇报最终存活列表。
+
+### 避旧创新
+每次研发新策略前，必须先回顾已有策略列表，确保新思路**不重复、不相似、低相关**。优先探索完全不同的因子：资金流、基本面、宏观、事件驱动、行业轮动、跨品种。
+
+**已有策略库速查（Alpha模式 A200+ / 信号模式 S*）**：
+| 类别 | 策略 | 核心逻辑 |
+|------|------|----------|
+| **Alpha - 低波** 🏆 | **A202** | **-rank(std_60d) 年化12.31%** |
+| Alpha - 动量 | A200 | rank(ret_20d) 年化7.31% |
+| Alpha - 反转 | A201 | -rank(ret_5d) 年化7.49% |
+| Alpha - 量价动量 | A203 | rank(ret×amt_ratio) 年化7.75% |
+| 基线 | S01/S02 | 等权 |
+| 低价 | S66/S67/S78/S92 | 价格分位+排除极端/周频/月频 |
+| 动量+低波 | S76/S81/S82/S91 | 双频段/分层/低波动过滤 |
+| 等权增强 | S93/S121/S122/S124 | 双剔除/低动量剔除/流动性中段 |
+
+### 自主迭代
+全自动化、自主决策，不询问。流程：写一批(3-5个)→**逐个跑**（`python strategies/aXXX.py`，不动 `_summary.csv`）→自主裁决(年化>15%且夏普>0.4保留，负收益/选股<10只删)→汇报成果。
+
+**重要**：所有新策略使用 alpha 模式写作。策略文件命名统一 `aXXX_因子名_freq.py`（如 `a204_lowvol_momentum_weekly.py`），`generate_alpha()` 返回 float 得分矩阵，引擎调用 `BacktestEngine(alpha_mode=True)`。
+
+### 灵感来源
+1. 券商金工研报(github.com/hugo2046/QuantsPlaybook)
+2. 学术论文(SSRN/arXiv/IEEE)
+3. 量化社区(聚宽/米筐/BigQuant)
+4. 海外论坛(QuantConnect/Reddit r/algotrading)
+5. 经典技术指标改造(A股验证，多数失效)
+
+## 核心经验
+
+### 频率选择（最关键发现）
+| 频率 | 特点 | 推荐场景 |
+|------|------|----------|
+| **周频** 🏆 | 换手3-20%，成本可控 | 绝大多数策略 |
+| **月频** | 换手2-3%，收益略低 | 低成本稳健型 |
+| **日频** ❌ | 换手50-87%，成本吃掉alpha | 仅限极少数宽基策略 |
+
+### 10年回测排名 (2016-05~2026-05, 复利年化, 中证1000等权周频基准)
+**注意**：年化收益率统一用复利法 `(1+total_ret)^(1/years)-1` 计算，不与固定基准法的单利年化混用。超额IR统一使用 `策略年化 - 基准年化`（年化相减）。
+
+| 排名 | 策略 | 年化 | 等权IR | 中证IR | 回撤 | 换手 |
+|:----:|------|:---:|:-----:|:-----:|:----:|:---:|
+| 1 | S110 低价均线支撑周频 | 12.56% | 0.08 | 0.78 | -31.79% | 13.53% |
+| 2 | S125 小盘均线支撑周频 | 12.27% | 0.05 | 0.68 | -30.62% | 4.99% |
+| 3 | S127 小盘低价周频 | 12.15% | 0.05 | 0.74 | -30.13% | 2.27% |
+| 4 | S112 温和动量安全性月频 | 12.01% | 0.03 | 0.72 | -38.28% | 1.31% |
+| 5 | S67 低价股周频 | 11.95% | 0.03 | 0.76 | -30.35% | 3.60% |
+| 6 | S78 低价股月频 | 11.63% | 0.01 | 0.75 | -31.41% | 2.45% |
+| 7 | S66 低价排除极端涨跌 | 11.08% | -0.04 | 0.74 | -34.07% | 9.25% |
+| 8 | S124 流动性适中选股周频 | 10.89% | -0.06 | 0.74 | -39.88% | 5.11% |
+| 9 | S109 低价流动性中段周频 | 10.83% | -0.06 | 0.74 | -36.62% | 5.55% |
+| 10 | S100 低价排除放量周频 | 10.79% | -0.07 | 0.77 | -37.51% | 7.35% |
+| 11 | S118 低价深度反转周频 | 10.71% | -0.07 | 0.67 | -36.27% | 4.82% |
+| 12 | S105 低价正向动量月频 | 10.56% | -0.09 | 0.70 | -44.22% | 5.09% |
+| — | (等权周频基准) | ~11.55% | — | — | — | — |
+
+### ⚠️ app.pyw 常见陷阱（汇总）
+### ⚠️ 策略扫描坑（2026-05-16修复）
+`app.pyw` 的 `scan_strategies()` 和 `core/platform.py` 的 `discover()` 都必须直接扫 `strategies/*.py`，**禁止按文件名前缀过滤**（如 `s[0-9]*` 或 `a[0-9]*`）。否则新前缀命名的策略会被忽略。
+
+正确写法：
+```python
+strategy_files = sorted(glob.glob(os.path.join(STRATEGIES_DIR, "*.py")))
+strategy_files = [f for f in strategy_files if os.path.basename(f) != "__init__.py"]
 ```
-a_stock_trade/
-├── app.py                  ← Windows桌面版（入口，在根目录）
-├── run_all.py              ← 一键全量回测+对比（入口，在根目录）
-├── core/                   
-│   ├── __init__.py
-│   ├── backtest_utils.py   ← 共享回测模块（数据加载、回测引擎、绘图）
-│   └── download_data.py    ← 数据下载器
-├── strategies/             ← 每个策略独立的 .py 文件
-│   ├── __init__.py
-│   ├── s01_equal_weight_daily.py  →  generate_signal(close, dates, **kw)
-│   ├── s02_equal_weight_weekly.py
-│   └── ... s36_*.py
-├── data/                   ← K线数据 CSV + NPZ 缓存
-└── results/                ← 自动保存的回测结果（每个策略一个子目录）
+
+### ⚠️ platform.py 架构（2026-05-16重写）
+`run_one()` 使用 `subprocess.run([sys.executable, filepath])` 以子进程方式运行每个策略，不再用 `importlib` 动态导入。原因：
+- 避免 `core/platform.py` 与 Python 内置 `platform` 模块的命名冲突
+- 支持信号模式和 alpha 模式混合（子进程各自处理自己的 import）
+- 隔离不同策略间的 import 污染
+
+`run()` 使用 `ThreadPoolExecutor(max_workers=4)` 并行执行。汇总 CSV 使用 `concat` + `drop_duplicates` 追加去重，不再覆盖写入。
+
+### `_read_meta` 紧凑格式兼容
+`platform.py` 的 `_read_meta()` 用 `re.split(r'[;\n]', content)` 拆分行内分号分隔的多条赋值，以支持紧凑格式：
+```python
+LABEL="A204 因子名"; FOLDER="A204-因子名"; FREQ="weekly"; TAGS=["alpha"]; POOL="csi1000"
 ```
+`_parse_label` 在 `app.pyw` 和旧的 `run_all.py` 中也必须同样处理。
 
-### core/backtest_utils.py 提供：
-
-| 类/函数 | 功能 |
-|---------|------|
-| `DataLoader` | 加载 CSV → `.npz` 缓存（首次 30s，之后 0.5s） |
-| `TradingRules` | 涨跌停（主板10%/创业板20%/科创20%/ST5%）、停牌（volume=0）、新股（首月禁交易） |
-| `BacktestEngine` | 信号驱动回测、等权再平衡、个股仓位≤10%、固定基准收益 |
-| `IndexLoader` | 下载中证1000指数做基准对比 |
-| `Visualizer` | 净值图+基准叠图+超额收益曲线+多策略对比图 |
-| `weekly_filter` | 周频过滤工具 |
-| `print_stats` | 统计结果打印 |
-
-## 策略开发模板
-
-每个策略是一个独立 `.py` 文件放在 `strategies/` 目录下，只需实现 `generate_signal(close, dates, **kwargs)`：
+### ⚠️ app.pyw `_parse_label` 大小写坑
+策略文件的元数据变量名不统一：旧策略用 `label=`/`folder=`（小写，模块级），新策略用 `LABEL=`/`FOLDER=`（大写）。`_parse_label` 若只匹配大写，新旧策略读到文件名回退；若只匹配小写，新策略读不到。必须分两步：
+1. 先匹配大写 LABEL/FOLDER
+2. 无大写时回退到文件名（与 platform.py 的 `_read_meta` 一致——它只读大写，setdefault fallback 到文件名）
+**不要**读小写 `label`/`folder` 作为 folder 值，因为 platform.py 的 `_read_meta` 不读小写，旧策略的结果目录名是文件名（如 `s01_equal_weight_daily`），不是小写 folder 的值。读小写会导致目录名不匹配，app显示为空。
 
 ```python
-#!/usr/bin/env python
-"""
-SXX 策略名称
-策略简要描述
-"""
-import sys, os
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+# ✅ 正确：只读大写，无大写回退文件名
+m = re.search(r'LABEL\s*=\s*["\'](.+?)["\']', content)
+m2 = re.search(r'FOLDER\s*=\s*["\'](.+?)["\']', content)
+folder = m2.group(1) if m2 else os.path.splitext(os.path.basename(src_path))[0]
+```
 
-import numpy as np
-from core.backtest_utils import (
-    DataLoader, BacktestEngine, Visualizer,
-    IndexLoader, TradingRules, RESULTS_BASE,
-    print_stats, COMMISSION, SLIPPAGE,
+### 双超额夏普（2026-05-16新增）
+每个策略同时输出两套超额指标，在app.pyw列表和CSV中都有：
+
+| 列名 | 含义 | stats key | 比较对象 |
+|:----|:----|:---------|:--------|
+| **等权夏普** | 策略 vs 等权周频组合的信息比 | `信息比率` | CSI1000等权周频组合(+195%总收益) |
+| **中证夏普** | 策略 vs 中证1000指数的信息比 | `中证信息比` | 中证1000指数(+30~50%总收益) |
+
+中证IR远高于等权IR，因为等权组合大幅跑赢了指数。中证指数数据通过akshare下载。年化超额用`策略年化-基准年化`计算（复利年化相减，不是总点数差/年数）。
+
+### 小盘因子研究（2026-05-16）
+**代理变量**：因无市值数据，用成交额(close×volume)的后30%分位作为小盘股代理（在CSI1000内选成交额最低的股票）。
+
+**发现**：在CSI1000（中盘股为主）内，加成交额筛选的效果有限。S125(小盘均线支撑)与S110(原版)收益几乎持平(21.67% vs 22.50%)。S127(小盘低价)比S67(原版低价)微幅增强(21.34% vs 20.77%)。**结论：CSI1000本身已经是中盘，内部的"小盘"分化不够大，成交额代理效果弱。真正的α需要全市场小盘股。**
+
+**保留策略**：
+| 策略 | 年化 | 回撤 | 说明 |
+|:----|:---:|:----:|:----:|
+| **S125 小盘均线支撑周频** | 21.67% | -30.62% | 成交额30%+低价后50%+站上MA20 |
+| **S127 小盘低价周频** | 21.34% | -30.13% | 成交额30%+价格后30%分位 |
+
+**成交额计算**：`amt = close * volume`（volume来自`loader.volume`，在`generate_signal(close, dates, volume=loader.volume)`中传入）。注意volume是float64，成交额量级约10^7~10^9。在计算分位数时建议用`np.nanpercentile`，空安全。`generate_signal`签名应加`volume=None, **kw`参数以避免调用出错。
+
+### ⚠️ 回测引擎陷阱 list
+- **has_cash 变负** → 导致回撤超100%。修复：分配基准按实际可用资金。
+- **has_cash=0.0 + max_position_pct** → 现金消失导致断崖下跌。修复：保留剩余现金，pv含现金。
+- **再平衡成本未扣除** → 收益虚高。修复：加 `has_cash -= cost`。
+- **t=0 缩进错误** → shares/mv/cost在 `if n_buy>0:` 外执行。修复：整个部署块缩进到if内。
+- **成本回收效应** → 成本在买入日从pv扣除，但次日pv按全市场价重算，成本"回来"了。修复：`has_cash = available - mv - cost`（成本嵌入has_cash），`pv[t] = has_cash + mv`。
+- **超额用固定基准NAV比百分比基准** → pv>1亿时放大超额。修复：超额统一用百分比收益 `pct_ret[t] = pv[t]/pv[t-1]-1` 计算 `excess_nav = 1 + strat_pct_nav - bm_nav`。
+- 详见 `references/negative-cash-fix-2026-05.md`。
+
+### 研发检查清单
+- [ ] 使用 alpha 模式（`generate_alpha()` + `BacktestEngine(alpha_mode=True)`）
+- [ ] 使用 `DECAY` 平滑（正整数窗口天数，默认 5）
+- [ ] 日均选股 ≥ 30只（否则不稳定）
+- [ ] 年化 > 5%（否则无效）
+- [ ] 回撤 > -50%（否则风险过高）
+- [ ] 换手 < 15%（decay 控制），检验：`日均换手 < 15%`
+- [ ] 与已有策略逻辑不重复
+- [ ] 超额为正（跑赢等权周频基准）才有保留价值
+
+### 工具命令
+```bash
+# ✅ 研发新策略：直接跑单个文件（不碰 _summary.csv）
+USERPROFILE="C:\Users\Mayn" python strategies/aXXX.py
+
+# ✅ 全量汇总（包括 s* 旧信号 + a* alpha 策略，4线程并行，子进程隔离）
+USERPROFILE="C:\Users\Mayn" python -m core.platform run
+
+# ✅ 查排名（只读，不跑策略），会自动跳过失败的策略
+python -m core.platform rank
+
+# ⚠️ 策略文件命名规则：aXXX_因子名_freq.py（alpha模式）
+#   sXXX_因子名_freq.py（旧信号模式，只维护不新增）
+
+### Alpha 模式研发（2026-05-16新增）
+
+引擎新增 `alpha_mode=True` 支持 float 得分矩阵替代 bool 信号。与原有信号模式的区别：
+
+| 维度 | 信号模式（默认） | Alpha 模式 |
+|:----|:--------------|:--------:|
+| 输入 | bool 矩阵 (选/不选) | float 矩阵（得分，>0选中） |
+| 选股 | `signal > 0.5` | `score > 0`（z-score均值0以上） |
+| 权重 | 等权分配 | 按得分比例分配（得分越高权重越大） |
+| 策略函数 | `generate_signal()` | `generate_alpha()` |
+
+**通用工具模块** `core/alpha_utils.py` — 所有 alpha 策略优先调用，不再重复造轮子：
+
+```python
+from core.alpha_utils import (
+    zscore_rank,        # 截面 rank → z-score 归一化  ★ 最终输出格式
+    decay_linear,       # 线性加权移动平均（平滑因子值，整数窗口天数）★ 标准平滑方式
+    ret_n,              # N日收益率
+    vol_n,              # N日波动率
+    amount_ratio,       # 成交额比例
+    price_position,     # 价格在区间中的分位
+    rolling_max_dd,     # 滚动最大回撤
+    ts_rank, ts_sum, ts_max, ts_min,  # 时间序列算子
+    delta, delay,                          # 差分/延迟
+    correlation, covariance,               # 滚动相关系数
+    signedpower, scale, rank_pct,          # 截面/数学运算
+    alpha101_001, alpha101_003, alpha101_012,  # Alpha101 示例因子
 )
+# 注意：alpha_smooth 已废弃，统一使用 decay_linear
+```
 
+**策略文件模板（紧凑风格 — 优先使用）**：
+```python
+LABEL="A209 因子说明频率"; FOLDER="A209-因子说明频率"; FREQ="weekly"; TAGS=["alpha","类别"]; POOL="csi1000"
+import sys,os; sys.path.insert(0,os.path.join(os.path.dirname(__file__),".."))
+import numpy as np
+from core.backtest_utils import *
+from core.alpha_utils import zscore_rank, decay_linear, ts_rank, delta
 
-def generate_signal(close, dates=None, **kw):
-    \"\"\"返回 bool 矩阵 (N_stocks, N_days)，True=该股票当天应被持有\"\"\"
-    signal = np.zeros(close.shape, dtype=bool)
-    # ... 你的信号逻辑 ...
-    return signal
+DECAY=5; STOCK_POOL="csi1000"  # DECAY=整数窗口天数！
 
+def generate_alpha(close,dates=None,volume=None,**kw):
+    n_stocks,n_days=close.shape; alpha=np.zeros((n_stocks,n_days)); first=weekly_filter(dates)
+    hist=np.zeros((n_stocks,n_days))  # 存原始因子值
+    for t in range(n_days):
+        # ★ 每天算原始因子值
+        hist[:,t] = ts_rank(close,t,10) * delta(close,t,3)
+        if not first[t]:
+            if t>0: alpha[:,t]=alpha[:,t-1]
+            continue
+        # ★ decay_linear 平滑后排名
+        raw=decay_linear(hist,t,DECAY)
+        valid=close[:,t]>0.5; alpha[:,t]=zscore_rank(raw,valid)
+    return alpha
 
 def main():
-    label = "SXX 策略名称"
-    folder = "SXX-策略名称"
-    print("=" * 60)
-    print(f"  {label}")
-    print("=" * 60)
-
-    loader = DataLoader().load()
-    close = loader.close
-    dates = loader.dates
-
-    print(f"[生成信号] {label}...")
-    signal = generate_signal(close, loader.dates)
-    # ...
-
-    idx_nav, idx_dates = IndexLoader.load(trade_dates=dates)
-    rules = TradingRules(close, loader.open_price, loader.volume,
-                         loader.codes, loader.names_arr,
-                         loader.is_st, loader.exchange)
-    engine = BacktestEngine(commission=COMMISSION, slippage=SLIPPAGE)
-    engine.run(close, signal, dates, trading_rules=rules)
-    engine.set_benchmark(idx_nav, idx_dates)
-
-    print_stats(engine.stats)
-    Visualizer.plot_and_save(engine, os.path.join(RESULTS_BASE, folder), label)
-    print("=" * 60)
-
-
-if __name__ == "__main__":
-    main()
+    ...  # 标准 main()
+if __name__=="__main__": main()
 ```
 
-**要点：**
-- `sys.path.insert(0, ...)` 确保 `strategies/sXX.py` 可以 standalone 运行（`python strategies/sXX.py`）
-- 当被 `run_all.py` 动态导入时，`sys.path` 由 run_all 管理，策略文件的 `sys.path.insert` 不会造成副作用
-- 周频策略额外 import `weekly_filter`：`from core.backtest_utils import ..., weekly_filter`
-- 文件命名必须 `sNN_描述性名称.py`，不能是 Python 标准库名（如 platform.py）
-
-### generate_signal 可获取的数据
-
-| 数据 | 来源 | 说明 |
-|------|------|------|
-| `close` | 参数传入 | 收盘价矩阵 (N_stocks, N_days) |
-| `dates` | 参数传入 | 日期数组 |
-| `loader.open_price` | main()中通过 loader 访问 | 开盘价 |
-| `loader.volume` | main()中通过 loader 访问 | 成交量 |
-| `loader.codes` | main()中通过 loader 访问 | 股票代码 |
-| `loader.is_st` | main()中通过 loader 访问 | 是否ST |
-| `loader.exchange` | main()中通过 loader 访问 | 板块（main/chinet/star） |
-
-### 常见信号类型
-
-| 类型 | 示例 | 实现要点 |
-|------|------|---------|
-| 价格动量 | 前日涨幅TOP20% | `ret = close[:, t] / close[:, t-1] - 1` |
-| 均值回归 | 前日下跌 | `signal[:, 1:] = ret[:, :-1] < 0` |
-| 移动均线 | MA5>MA20 | 逐个时间窗口 `np.nanmean` |
-| 波动率 | 低波/高波选股 | `np.nanstd` over rolling window |
-| RSI | 超卖/超买 | 14日RSI公式，注意RSI=0边缘情况 |
-| 布林带 | 突破上下轨 | MA±k×std |
-| 创新高/低 | 突破/超卖 | 滚动 `np.nanmax`/`np.nanmin` |
-| 成交量 | 放量/缩量 | 需要从 loader.volume 获取（signal函数需额外传参）|
-
-## 频次选择
-
-| 频次 | 信号生成 | 持有方式 |
-|------|---------|---------|
-| 日频 | 每天独立产生信号 | signal 每天可变化，引擎自动买卖 |
-| 周频 | 仅周一产生信号 | 用 `weekly_filter(dates)` + forward-fill：`for t: if not first[t]: signal[:,t] = signal[:,t-1]` |
-
-信号量太少（日均<50）容易触发资金集中放大效应。
-
-## 调试与Bug排查
-
-### 常见问题
-
-| 现象 | 根因 | 修复 |
-|------|------|------|
-| **总收益 -100%** | 信号太少+仓位上限+MIN_EFFECTIVE挡不住 | 加最低持仓数保护 |
-| **总收益异常高（如10000%+）** | 信号太少→仓位上限→现金累积→再投→放大（S09案例） | 加信号最小数量限制，详见下方"集中度放大" |
-| **NAV全为NaN** | `0 * NaN = NaN` | 数据层 `fillna(0.0)` |
-| **净值全为0（total=0）** | 清仓后 `capital_deployed` 未重置，下次信号日跳过部署导致 `total=has_cash` 未被计入 | 清仓/无信号日重置 `capital_deployed=False` |
-| **老股被当新股** | `np.argmax(close>0)` 在首日返回0 | 加判断 `if first==0: continue` |
-| **成本重复计算** | 仓位超限转现金同时计了两次成本 | 统一由 `traded_sum` 覆盖 |
-| **pv[t]不更新** | 仓位超限转现金后 `pv[t]` 没加现金 | `pv[t]=has_cash+sum(positions)` |
-| **`platform` 模块冲突** | 在策略目录下创建 `platform.py` 会覆盖 Python 标准库 | 文件名避开标准库名（如 `gen_platform.py`） |
-| **超额收益为 -100%** | 固定基准法下相对基准的对齐索引漂移 | 确保 `set_benchmark()` 以 `_first_nav_idx` 对齐 |
-
-**Python 标准库文件名黑名单（创建 .py 文件时避开）：**
-`os`, `sys`, `time`, `math`, `json`, `csv`, `re`, `pathlib`, `io`, `base64`, `subprocess`, `datetime`, `random`, `itertools`, `collections`, `typing`, `platform`, `string`, `numbers`, `decimal`, `fractions`, `statistics`, `hashlib`, `hmac`, `secrets`, `uuid`, `bisect`, `heapq`, `array`, `weakref`, `types`, `copy`, `pprint`, `reprlib`, `enum`, `ast`, `inspect`, `textwrap`, `codecs`, `struct`, `pickle`, `shelve`, `marshal`, `dbm`, `sqlite3`, `configparser`, `netrc`, `logging`, `getpass`, `curses`, `socket`, `ssl`, `email`, `json`, `mailcap`, `mimetypes`, `base64`, `binascii`, `quopri`, `uu`, `tabnanny`, `pyclbr`, `py_compile`, `compileall`, `dis`, `pickletools`, `doctest`, `unittest`, `pdb`, `profile`, `trace`, `webbrowser`, `tkinter`, `turtle`, `wave`, `colorsys`, `imghdr`, `sndhdr`, `fileinput`, `filecmp`, `tempfile`, `shutil`, `glob`, `fnmatch`, `linecache`, `macpath`, `posixpath`, `dircache`。
-
-最佳实践：策略脚本统一用 `sNN_描述性名称.py`，工具脚本用 `gen_xxx.py` 或 `xxx_tool.py`。
-
-### 警惕：sed/awk 修改 Python 文件会破坏 docstring
-
-使用 `sed` 或 `awk` 批量修改 Python 文件时，多行 docstring 的结构极易被破坏：
-- `sed` 只对单行模式匹配，无法感知 `"""` 块的开始和结束
-- `awk` 的 `/^"""/` 模式会漏掉非行首的 `"""`，混入 docstring 后会把 `import` 行吞进 docstring 里
-- **正确做法**：对 Python 文件的批量修改务必使用 Python 脚本（`glob.glob` + `re.sub`），以 AST-aware 方式处理
-
-如果已经破坏了，修复方法是：
-1. 找到 `def generate_signal` 作为分界线
-2. 从此到文件尾是整个策略的逻辑 body（通常完整无损）
-3. 重建文件头（shebang + docstring + sys.path + import），拼接 body
-
-### 集中度放大效应（S09 案例）
-
-**现象：** RSI超卖策略（日均信号仅 5-50 只），总收益 > 20000%，超额夏普极低。
-
-**根本原因：**
-```
-深跌反弹 +20% → 超限10%卖出套现 → 现金增加
-→ 下次再平衡现金+盈利同时再投 → 放大
-→ 10年×2426天累积出天文数字
-```
-
-**修复方法：**
-
-1. **加信号最小数量保护**（已内置在BacktestEngine）：
+**引擎调用**：
 ```python
-MIN_EFFECTIVE = max(20, int(n_sig_t * 0.1))
-if n_effective < MIN_EFFECTIVE:
-    achievable = shares[:, t-1].copy()  # 不交易，保持当前持仓
+engine = BacktestEngine(commission=COMMISSION, slippage=SLIPPAGE,
+                        alpha_mode=True)
+engine.run(close, alpha_scores, dates, trading_rules=rules, valid=valid)
 ```
 
-2. **策略层加总信号量过滤**（在 generate_signal 中）：
-```python
-mask = (rsi[:, t] < 25) & (rsi[:, t] > 0) & (close[:, t] > 0.5)
-if mask.sum() >= 80:          # 至少80只股票触发才建仓
-    signal[:, t] = mask
-```
+**引擎内部逻辑**（`core/backtest_utils.py`）：
+- `_alpha_to_weights(scores, valid_mask, top_pct=1.0)` — 将得分转为选股 + 权重
+- `score > 0` → 选中
+- 权重 = 正分归一化（分数越高权重越大）
+- `alpha_top_pct` 参数可限制仅取前N%
 
-**判断信号是否过少：**
-```python
-per_day = signal.sum(axis=0)
-print(f"avg={per_day.mean():.0f} median={np.median(per_day):.0f} "
-      f"<20 days={(per_day<20).sum()}")
-```
-- 日均 < 50 → 高风险
-- 有超 10% 的交易日信号 < 20 → 极高风险
+**已有Alpha策略（CSI1000周频，decay_linear=5）**：
+| 策略 | 因子 | 年化 | 回撤 | 换手 |
+|:----|:----|:---:|:---:|:---:|
+| A208 VWAP背离Alpha 🏆 |  Δvwap×-Δclose | 14.50% | -23.20% | 19.36% |
+| A202 低波Alpha 🏆 | -vol_60d | 12.71% | -18.05% | 4.04% |
+| A201 反转Alpha | -ret_5d | — | — | — |
+| A203 成交额动量 | ret×amt_ratio | — | — | — |
+| A200 动量Alpha | ret_20d | — | — | — |
 
-### 参数调优模式
+**`decay_linear` 用法**：`decay_linear(hist, t, window)` 对 `hist` 第 t 天往前 `window` 天的数据做线性加权平均，权重 `1,2,...,window`（今天权重最高）。用在 `generate_alpha` 中平滑原始因子值后再 `zscore_rank`，降低噪声减少换手。
+- `DECAY=5`：5天窗口（默认）
+- 窗口太小(<3)则平滑不足；太大(>20)则信号滞后
+- 不需要再维护 `alpha_smooth`，已被 `decay_linear` 替代
 
-当策略趋势正确但参数未优化时：
+### app.pyw `_parse_label` 大小写坑\n见 `references/app-parse-label-regex-2026-05.md`。新旧策略文件的元数据变量名不同（旧用 `label=`/`folder=` 小写，新用 `LABEL=`/`FOLDER=` 大写），`_parse_label` 的正则必须同时匹配两者，否则app扫不到结果。
 
-1. 在 `generate_signal()` 中添加命名参数：
-```python
-def generate_signal(close, dates=None, lookback=10, hold_days=5, **kw):
-```
+### 图表布局（Visualizer.plot_and_save）
+3个子图，暗色主题，尺寸 14×10：
 
-2. 编写调优脚本进行网格搜索：
-```python
-for lb in [5, 10, 15, 20]:
-    for hd in [3, 5, 8, 10]:
-        signal = generate_signal(close, dates, lookback=lb, hold_days=hd)
-        engine = BacktestEngine(...)
-        engine.run(close, signal, dates, trading_rules=rules)
-        engine.set_benchmark(idx_nav, idx_dates)
-        sharpe = float(engine.stats["夏普比率"])
-        # 以超额夏普为优化目标
-```
+| 子图 | 高度比 | 内容 | 颜色 |
+|:---:|:------:|------|:----:|
+| 1 | 3 | 策略净值 + 等权周频基准(虚线) + 等权超额(点线) + 持仓数(右Y轴柱状) | 蓝/黄/绿/紫 |
+| 2 | 1 | **中证1000超额**曲线（差值法，含最大回撤标注） | 橙(#f97316) |
+| 3 | 1 | **等权超额**曲线（差值法，含超额回撤标注） | 绿 |
 
-3. 可视化调优结果，选择超额夏普 + 回撤 综合最优
+- 子图2替代了原来的回撤折线图（已移除）
+- 所有超额均使用差值法 `1 + nav - benchmark`，而非比值法
+- 中证1000指数数据通过akshare下载，失败时显示"数据不可用"
 
-### A股市场特性（经验结论）
+### 比较基准（引擎自动计算）
+**`BacktestEngine.run()` 末尾自动调用 `_compute_benchmark(close, dates)`**，不再需要手动调用 `IndexLoader.load()` + `set_benchmark()`。
 
-- **动量效应 >> 反转效应**：追涨（涨幅TOP10%、20日新高）夏普高，抄底（跌幅TOP10%、布林带下轨）亏钱
-- **低价股效应显著**：低价股（小市值）夏普远高于高价股
-- **等权是稳赢基本盘**：不用任何择时，+134%/10年
-- **日频动量 + 10%仓位上限**：在30+策略中独占鳌头
-- **短期回看窗口优于长期**：S35调优显示 lookback=5（5日低点）超额夏普 0.71，远优于 lookback=30 的 0.00
-- **较紧止损更平滑**：回撤 5% 止损的夏普高于 10% 止损
-
-### 状态机类策略开发（S31 案例）
-
-信号依赖于持仓状态（如在持仓/不在持仓）时，需要对每只股票逐日遍历：
+- 基准：**等权周频组合（中证1000股票池）**（CSI1000成分股 + close>0.5，每周等权再平衡）
+- 超额计算：**差值法** `excess_nav = 1 + nav - bm_nav`（不再是比值法 `nav / aligned`）\n- 年化超额：`strategy_ann - benchmark_ann`（两端都用复利年化，不是总点数差/年数）
+- 等权基准2016-05~2026-05总收益约+195.18%（CSI1000池，年化11.55%），详情见 `references/equal-weight-benchmark-2026-05.md`\n- 同时自动计算**中证1000指数超额**：`self.csi1000_excess_nav = 1 + nav - csi1000_index`（用于图表子图2，通过akshare下载指数数据）
+- 不再单独依赖 `IndexLoader` 类，所有53个策略文件已清除 `IndexLoader` 导入和 `set_benchmark()` 调用
+- `set_benchmark()` 保留用于手动覆盖，但一般不需要
+- 细节见 `references/equal-weight-benchmark-2026-05.md`
 
 ```python
-def generate_signal(close, dates=None, **kw):
-    n_stocks, n_days = close.shape
-    signal = np.zeros(close.shape, dtype=bool)
-    for s in range(n_stocks):
-        in_pos = False
-        peak = 0.0
-        for t in range(n_days):
-            if not in_pos:
-                if 创新高条件:
-                    signal[s, t] = True; in_pos = True; peak = price
-            else:
-                signal[s, t] = True  # 持续持有
-                if 回撤止损条件:
-                    signal[s, t] = False; in_pos = False
-    return signal
+# ❌ 旧模式（已废弃）
+idx_nav, idx_dates = IndexLoader.load(trade_dates=dates)
+engine = BacktestEngine(...)
+engine.run(...)
+engine.set_benchmark(idx_nav, idx_dates)
+
+# ✅ 新模式（引擎自动完成）
+engine = BacktestEngine(...)
+engine.run(close, signal, dates, trading_rules=rules, valid=valid)
+# benchmark统计、超额曲线自动生成
 ```
 
-这种模式适用于：追高止损、移动止盈、择时进出等策略。
-注意：3000只×2500天 ≈ 7.5M 次循环，耗时约 1-2 秒。
+### 技术细节
+- `BACKTEST_START = "2016-05-17"`（10年），修改在 `core/backtest_utils.py` 全局配置
+- 数据范围 2016-05-17 ~ 2026-05-15，2426个交易日，2930只股票（经清洗）
+- CSI1000成分股覆盖：2016年399只 → 2026年775只
+- 核心引擎在 `core/backtest_utils.py`：`BacktestEngine.run()` 自动调用 `_compute_benchmark()` 计算等权周频基准+超额
+- 超额净值 = 差值法：`1 + strat_pct_nav - benchmark_nav`（百分比收益，非固定基准，防止pv>1亿时放大）
+- 策略不再需要导入 `IndexLoader` 或调用 `set_benchmark()` — 引擎自动处理
+- `set_benchmark()` 保留用于手动覆盖基准场景
+- `BACKTEST_START` 全局变量控制回测起始日期
+- 策略文件一律以 `a` 前缀命名：`a204_my_factor_weekly.py`
+- 策略文件加 `LABEL/FOLDER/FREQ/TAGS/POOL` 元数据
+  - LABEL = "A204 因子描述频率"  (A开头标识alpha模式)
+  - FOLDER = "A204-因子描述频率"  (目录名与LABEL对应)
+  - FREQ = "weekly" 或 "monthly"
+  - TAGS = ["alpha", "因子类别", "频率"]
+  - POOL = "csi1000"
+- `core/platform.py` 已清理 `IndexLoader` 导入，支持标签筛选
+- `weekly_filter` / `monthly_filter` 在 core/backtest_utils.py
+- Windows路径避开 `<>:"/\|?*` 字符
+- 用户名 `Mayn`，`USERPROFILE` 环境变量经常被污染
+- Windows 平台要点见 `references/windows-pitfalls-2026-05.md`
+- 涨跌停用0.5%容差(float32精度问题)\n- 固定基准(1亿) + 复利年化计算 `(1+total_ret)^(1/years)-1`\n- 用户是Windows中文用户，USERPROFILE环境变量被污染，需 `USERPROFILE="C:\\Users\\Mayn"` 前缀运行
 
-### 辅助函数在文件重构时易丢失
+### ⚠️ 回测引擎陷阱：has_cash 管理（共7个bug已修复）
 
-当用 `def generate_signal` 作为切分点重建策略文件时，**所有在 `generate_signal` 之前定义的辅助函数（`_vol`, `_rsi`, `_ma`, `_bollinger`）都会丢失**。
+**触发条件**：固定基准法（fixed_base=1亿）下，持仓股票持续下跌时再平衡，引擎仍按满额1亿重新分配，`net_pnl = cur_pos - new_pos` 为负 → `has_cash` 变负 → 清仓后 NAV < 0 → 回撤 >100%。
 
-**检查方法：** 扫描每个策略文件，看 `generate_signal` 体内调用了哪些以 `_` 开头的函数名但文件中没有定义：
+**全部修复**（2026-05-16，详见 `references/negative-cash-fix-2026-05.md`）：
+
+| # | Bug | 修复 |
+|:--|:----|:----|
+| 1 | 再平衡按满额分配，无视实际亏损 | `alloc_base = min(fixed_base, available_total)` |
+| 2 | 重新建仓按满额分配 | `alloc_base = min(fixed_base, available)` |
+| 3 | 再平衡成本未从现金扣除 | `has_cash -= cost` |
+| 4 | `has_cash=0.0` + max_position_pct → 现金消失，pv漏算现金；成本回收效应(次日pv重算) | `has_cash = available - mv - cost`, `pv = has_cash + mv` |
+| 5 | 超额用固定基准NAV比百分比基准 → pv>1亿时放大超额 | 超额统一用百分比收益 `pct_ret[t] = pv[t]/pv[t-1]-1` 计算 |
+| 6 | 新股上市日(close[t-1]=0)导致基准计算inf | `rets = np.where(np.isfinite(rets), rets, 0.0)` 在 _compute_benchmark 中 |
+| 7 | **年化超额用总点数差÷年数(简单平均)** → 等权IR为负但中证IR虚高至1.25 | 改为 `ann_excess = strat_ann - bm_ann`（复利年化相减） |
+| 8 | **年化收益率(固定基准法用单利)与IR(百分比复利)不一致** → IR偏低 | `_compute_stats` 统一用 `(1+total_ret)^(1/years)-1` 复利法 |
 
 ```python
-import re
-def check_missing_helpers(content):
-    m = re.search(r'def generate_signal.*?:(.*?)(?=\ndef |\Z)', content, re.DOTALL)
-    if not m: return []
-    body = m.group(1)
-    defined = set(re.findall(r'def (\w+)', content))
-    calls = set(re.findall(r'(_[a-zA-Z]\w*)\s*\(', body))
-    return calls - defined
+# ❌ 错误：无视亏损仍按满额分配
+target_amt = self.fixed_base / n_effective
+
+# ✅ 正确：按实际可用资金分配
+available_total = max(has_cash + cur_mv, 0)
+alloc_base = min(self.fixed_base, available_total)
+target_amt = alloc_base / n_effective
+
+# ❌ 错误：pv不含剩余现金
+has_cash = 0.0
+pv[t] = mv - cost
+
+# ✅ 正确：保留现金，成本嵌入has_cash，pv含全部价值
+has_cash = available - mv - cost  # 成本永久扣除
+pv[t] = has_cash + mv  # = available - cost
 ```
 
-**缺失函数的补回模板：**
-
-```python
-def _ma(close, w):
-    """简单移动平均线"""
-    ma = np.zeros_like(close)
-    for t in range(w, close.shape[1]):
-        ma[:, t] = np.nanmean(close[:, t-w+1:t+1], axis=1)
-    return ma
-
-def _vol(close, w=20):
-    """滚动波动率（标准差）"""
-    ret = np.zeros_like(close)
-    mask = close[:, :-1] != 0
-    with np.errstate(divide="ignore", invalid="ignore"):
-        ret[:, 1:] = np.where(mask, close[:, 1:] / close[:, :-1] - 1.0, 0.0)
-    vol = np.zeros_like(close)
-    for t in range(w, close.shape[1]):
-        vol[:, t] = np.nanstd(ret[:, t-w+1:t+1], axis=1)
-    return vol
-
-def _rsi(close, w=14):
-    """RSI 计算"""
-    rsi = np.zeros_like(close)
-    ret = np.zeros_like(close)
-    mask = close[:, :-1] != 0
-    with np.errstate(divide="ignore", invalid="ignore"):
-        ret[:, 1:] = np.where(mask, close[:, 1:] / close[:, :-1] - 1.0, 0.0)
-    for t in range(w, close.shape[1]):
-        c = ret[:, t-w+1:t+1]
-        g = np.where(c > 0, c, 0); l = np.where(c < 0, -c, 0)
-        avg_g = np.nanmean(g, axis=1); avg_l = np.nanmean(l, axis=1)
-        rs = np.where(avg_l != 0, avg_g / avg_l, 0)
-        rsi[:, t] = 100 - 100 / (1 + rs)
-    return rsi
-
-def _bollinger(close, w=20, n_std=2):
-    """布林带: 返回 (middle, upper, lower)"""
-    middle = _ma(close, w)
-    std = np.zeros_like(close)
-    for t in range(w, close.shape[1]):
-        std[:, t] = np.nanstd(close[:, t-w+1:t+1], axis=1)
-    upper = middle + n_std * std; lower = middle - n_std * std
-    return middle, upper, lower
-```
-
-**⚠️ `_bollinger()` 返回三元组**，调用时必须解包：
-```python
-# 正确
-_, _, lower = _bollinger(close, 20, 2.0)   # S15 布林带下轨
-_, upper, _ = _bollinger(close, 20, 2.0)   # S16 布林带上轨
-
-# 错误 — lower/upper 会是 (3, N_days) 而非 (N_stocks, N_days)
-lower = _bollinger(close, 20, 2.0)
-```
-
-单变量接收三元组会导致信号矩阵形状从 `(2930, 2426)` 变成 `(3, 2426)`，引擎跑出 `broadcast error`。
-
-### `run_all.py` 必须同时保存单个策略结果
-
-`run_all.py` 默认只做策略对比（`Visualizer.plot_comparison`），**不会保存每个策略的个股结果文件夹**。如果不加保存，`results/` 下只有 `30策略对比/`，没有 `S01-等权日频/` 等独立文件夹，`app.py` 也读不到数据。
-
-**必须在每个策略跑完后加** `Visualizer.plot_and_save()`：
-
-```python
-for name, modname in STRATEGIES:
-    ...
-    engine.run(close, signal, dates, trading_rules=rules)
-    engine.set_benchmark(idx_nav, idx_dates)
-    ...
-
-    # ★ 保存单个策略结果
-    folder_name = name.replace(" ", "-")
-    Visualizer.plot_and_save(engine,
-                             os.path.join(RESULTS_BASE, folder_name),
-                             name)
-```
-
-这样每个策略的结果才会出现在 `results/S01-等权日频/equity_curve.png` 等路径。
-
-### 标准开发流程
-
-1. **创建文件**：在 `strategies/` 目录下复制现有 `s*.py` 模板，修改 `generate_signal()`。模板包含 `main()` 和 `if __name__ == "__main__":` 入口。记得使用 `from core.backtest_utils import ...` 而非直接 `from backtest_utils import ...`。
-2. **运行测试**：`python strategies/sXX_xxx.py` 看总收益、超额夏普、回撤
-3. **检查异常**：
-   - 总收益 > 500% → 检查信号量是否太少（日均<50）
-   - 回撤 < -80% → 检查信号量或加最小持仓保护
-   - 超额夏普 > 0.5 → 优秀，考虑参数调优
-4. **参数调优**：修改 `generate_signal(*, lookback, hold_days, ...)` 支持 kwargs，网格搜索
-5. **加入 run_all**：在 `run_all.py` 的 `STRATEGIES` 列表中添加：
-   ```python
-   ("S37 新策略名称", "s37_new_strategy"),
-   ```
-   注意：`run_all.py` 使用 `__import__()` 动态导入策略模块，它已将 `strategies/` 加入 sys.path，所以只写模块名（不含 `.py`）。
-
-   `run_all.py` 的标准 sys.path 设置：
-   ```python
-   PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
-   sys.path.insert(0, PROJECT_ROOT)
-   sys.path.insert(0, os.path.join(PROJECT_ROOT, "strategies"))
-   from core.backtest_utils import (
-       DataLoader, BacktestEngine, Visualizer, ...
-   )
-   ```
-6. **结果自动出现在app**：重跑 `python app.py` 即可在桌面应用中看到新策略。
-7. **推送GitHub**：`git add -A && git commit && git push`
-
-## 夏普比率定义
-
-超额夏普 = 年化超额收益 / 年化跟踪误差（信息比率），在 `set_benchmark()` 中计算并覆盖原夏普。不是传统总收益夏普，因为固定基准法下总收益夏普会严重失真。
-
-## 固定基准 vs 复利
-
-| 模式 | 收益计算 | 年化公式 | 适用场景 |
-|------|---------|---------|---------|
-| **固定基准（默认）** | P&L / base | total_ret / years（单利） | 防止复利放大效应，收益真实反映策略能力 |
-| 复利 | NAV / NAV_{t-1} - 1 | (1+total_ret)^(1/years)-1 | 传统基金净值跟踪 |
-
-固定基准模式下：日收益 = 今日P&L / INIT_CAP，10% 仓位涨 10% → 利润 = 10%×10%×base = 1% base。
-
-## 结果查看方式
-
-| 方式 | 命令 | 说明 |
-|------|------|------|
-| **Windows桌面App** | `python app.py` | tkinter界面，左侧策略列表 + 右侧图表+指标 + 显示源码 |
-| 终端 | `python strategies/sXX_xxx.py` | 运行单个策略，文本结果（不弹图） |
-| 全量对比 | `python run_all.py` | 跑所有策略，生成对比图+CSV |
-
-### Windows桌面App（app.py）
-
-使用 tkinter + Pillow 构建，无外部依赖。架构：
-
-```
-app.py
-├── scan_strategies()      ← 扫描 results/ 目录，读取 stats.csv
-├── App(Tk)
-│   ├── 左侧: Treeview     ← 策略列表（名称、总收益、超额夏普、回撤）
-│   ├── 右侧: Canvas       ← 显示 equity_curve.png 缩放版
-│   ├── 底部: Text         ← 关键指标文字
-│   ├── [📂 打开原图]      ← 系统图片查看器看全尺寸
-│   └── [📄 显示代码]      ← 弹出新窗口显示策略 .py 源码
-└── show_code()            ← 从文件夹名映射到源码文件
-```
-
-**文件夹名→源码文件映射：**
-结果目录 `S01-等权日频` → 提取前缀 `s01` → 在 `strategies/` 下匹配 `s01_*.py`。确保策略文件名以 `sNN_` 开头并放在 `strategies/` 中。
-
-**添加新策略到app：** 只需在 results/ 下有对应结果目录，app 自动加载，无需修改 app.py。完整 app 源码见 `templates/app.py`。
-
-> **注意：** app.py 的 `_load_code()` 方法（内置版）或 `show_code()`（模板版）会在 `strategies/` 子目录中搜索源码文件，而不是在项目根目录。如果重构后源码搜索失败，先确认 app.py 的 glob 路径指向了 `strategies/`。
-
-**无终端启动 & Treeview 排序实现** 见 `references/app-deck.md`。
-
-### 用户偏好：回测不弹图
-
-策略运行时 `Visualizer.show_chart()` 已被移除，结果仅保存到磁盘，不弹窗。如需查看图表，通过 app.py 或手动打开 `results/<策略名>/equity_curve.png`。
-
-## 已知缺陷
-
-- `generate_signal()` 只接收 close 和 dates，如需 volume/open 需改接口
-- 单日10%仓位上限是总市值的10%，非固定的10%
-- 没有做空/杠杆支持
-- Python 循环生成信号（5000×2500 量级）耗时较长
-- 文件名不能叫 `platform.py`（与 Python 标准库冲突）
+**修复效果**：原先 s18 回撤 -104.98% → -95.45%，S118 单日-84.70%断崖消失 → 最大-6.27%。等权策略超额不再有spurious正超额。完整修复日志见 `references/bug-log-2026-05-16.md`。  

@@ -116,9 +116,10 @@ akshare 通过 East Money 接口获取数据，支持多进程全市场下载。
 
 两者 adjust 参数：`"qfq"`=前复权, `"hfq"`=后复权, 留空=不复权。
 
-### 多进程方案
+## References
 
-> 详细实现见 `references/akshare-multiprocess-download.md`
+- `references/akshare-multiprocess-download.md` — 多进程全市场下载方案
+- `references/limit-price-data-sources.md` — 涨跌停价格数据源对比：akshare 无 high_limit/low_limit 字段，各方案优劣，手动计算规则与精度要求
 
 **为什么要多进程**：akshare 内部用 `py_mini_racer` 解析 East Money 的 JS 接口，多线程/单进程多 worker 会导致崩溃。解决方案是 **spawn 模式的多进程**，每个 worker 独立加载 akshare。
 
