@@ -565,6 +565,66 @@ subprocess.run(["schtasks", "/create", "/tn", "任务名",
 
 ## Pitfalls
 
+### 0. Division by zero everywhere
+
+Every `close / close` return calculation must guard against zero divisors:
+
+```python
+# ❌ Wrong: prev could be 0 (delisted/suspended stock)
+rets = close[held, t] / close[held, t-1] - 1
+
+# ✓ Correct:
+rets = close[held, t] / np.maximum(close[held, t-1], 1e-10) - 1
+```
+
+Same goes for `pv[t] / pv[t-1]` in NAV calculation and `pv / fixed_base` in fixed-base mode. Apply `np.maximum(denominator, 1e-10)` universally.
+
+### 0.5. `np.savez_compressed` without try-except
+
+NPZ writes can fail silently (disk full, permissions), and the next read will crash with a corrupted file. Every `np.savez_compressed` call needs try-except:
+
+```python
+try:
+    np.savez_compressed(path, **data)
+except Exception as e:
+    print(f"[警告] 保存失败: {e}")
+    # Fallback: try CSV for critical data
+```
+
+This applies to: DataLoader cache, `save_position_matrix`, and `fetch_fundamentals` NPZ output.
+
+### 0.6. position_matrix NPZ format (2026-05-17)
+
+Replace CSV with NPZ for backtest position data:
+
+- **Save**: `engine.save_position_matrix(output_dir, codes, dates)` — now called from `Visualizer.plot_and_save()`
+- **Read**: `np.load("position_matrix.npz")["pos_value"]` — shape `(n_stocks, n_days)`, float32
+- **CSV fallback**: if NPZ save fails, write a minimal CSV as backup
+- **Cleanup**: delete old `position_matrix.csv` files with `find results -name "position_matrix.csv" -delete`
+
+The NPZ is ~3MB vs CSV ~7.5MB per strategy (~60% smaller), and loads 10x faster.
+
+### 0.7. Thread safety for global caches
+
+`load_fundamentals()` (in `data_loader.py`) caches NPZ data globally with `_FUND_CACHE`. When multiple strategies run in parallel threads (e.g., `ThreadPoolExecutor` in `_run_all_live_strategies`), concurrent access to the cache causes race conditions.
+
+**Fix**: wrap cache reads and writes in `threading.Lock()`:
+
+```python
+_FUND_CACHE = None
+_FUND_LOCK = threading.Lock()
+
+def load_fundamentals(codes=None):
+    with _FUND_LOCK:
+        if _FUND_CACHE is not None and codes is None:
+            return _FUND_CACHE
+    ...
+    with _FUND_LOCK:
+        if codes is None:
+            _FUND_CACHE = result
+    return result
+```
+
 ### 1. NaN propagation: `0 × NaN = NaN`
 
 Even after `np.where(valid, value, 0)`, if `close` contains NaN, `0.0 × NaN = NaN` poisons sums. Fix: clean at DataFrame level before `.values`.

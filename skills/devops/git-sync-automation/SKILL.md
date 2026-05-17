@@ -170,6 +170,18 @@ The script name must be a file in `~/AppData/Local/hermes/scripts/` (or `~/.herm
 
 ## Pitfalls
 
+### Giant .git directory causes push failures
+
+If the sync task fails with exit code 255 and `du -sh .git` shows hundreds of MB to >1GB, check for ghost data files inside `.git/`:
+
+```bash
+ls .git/data/   # should NOT exist in a normal repo
+```
+
+`.git/data/` is NOT a standard git directory. Files placed there bloat `.git/` and can cause push rejections from GitHub. See `references/troubleshoot-bloated-git-dir.md` for full diagnosis and cleanup steps.
+
+
+
 ### Conflict detection
 If both machines edit the same line, `git pull --rebase` will fail. The script exits with an error message. Manual resolution is required:
 

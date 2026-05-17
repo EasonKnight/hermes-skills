@@ -1,75 +1,33 @@
-# app.pyw 配色迭代记录 (2026-05-16)
+# app.pyw 配色方案记录
 
-## 最终定稿：Dracula 主题 (v9)
+## 最终方案（2026-05-17）：Python IDLE Classic 亮色主题
 
-### 颜色常量
+**状态**：已应用于 app.pyw
+**来源**：cpython/Lib/idlelib/config-highlight.def
+**基调**：白底黑字
 
-```python
-# ── 配色方案（Dracula）──
-BG_PRIMARY = "#282a36"        # 主背景
-BG_SECONDARY = "#2d2f3e"      # 面板背景
-BG_TERTIARY = "#383a4a"       # 代码区/输入框
-FG_PRIMARY = "#f8f8f2"        # 主文字（暖白）
-FG_SECONDARY = "#6272a4"      # 次要文字（注释紫灰）
-FG_GREEN = "#50fa7b"          # 正收益（Dracula 绿）
-FG_RED = "#ff5555"           # 负收益（Dracula 红）
-ACCENT_BLUE = "#8be9fd"       # 蓝色强调（Dracula 青）
-ACCENT_GREEN = "#2e8b57"      # 绿按钮
-ACCENT_RED_BG = "#da3633"     # 红按钮
-ACCENT_GOLD = "#ffb86c"       # 警告（Dracula 橙）
-BORDER = "#44475a"            # 边框（当前行色）
-TABLE_STRIPE = "#222432"      # 表格交替行
-HOVER = "#44475a"             # 悬停（当前行色）
-```
+### 语义映射
 
-### 选中行
+| Python IDLE 语义 | 颜色 | UI 用途 |
+|-----------------|------|---------|
+| 背景(normal) | `#ffffff` | 窗口、面板 |
+| 背景(浅灰) | `#f0f0f0` | 卡片、侧边栏、表格斑马纹 |
+| 背景(中灰) | `#e0e0e0` | 输入框、表头、悬停 |
+| 前景(normal) | `#000000` | 主文字 |
+| 前景(辅文) | `#666666` | 标签、注释 |
+| 关键字(keyword) | `#ff7700` | 金色强调、金额高亮、警告 |
+| 函数(definition) | `#0000ff` | 选中行、蓝色按钮、链接 |
+| 字符串(string) | `#00aa00` | 正收益数值、成功状态、绿色按钮 |
+| 注释(comment) | `#dd0000` | 负收益数值、危险操作、红色按钮 |
+| 内置(builtin) | `#900090` | AI/自动研发按钮、紫色强调 |
 
-背景 `#bd93f9`（Dracula 紫），文字 `#1a1a2e`（深色），通过 style.map 实现：
+### 被拒绝的历史方案（不再尝试）
+- Dracula 紫黑、TradingView 暗色、Tokyo Night、GitHub Dark、Catppuccin
+- 任何自定义混合色、纯灰度/Tailwind 灰阶
+- 之前应用的 color_code.txt "现代舒适深色（暗色主题）"
 
-```python
-style.map("Treeview", background=[("selected", "#bd93f9")],
-          foreground=[("selected", "#1a1a2e")])
-```
-
-### Python 语法高亮（v9 新增）
-
-代码编辑器绑定 `<KeyRelease>`，使用 `Text.tag_configure` + 正则分词：
-
-| 元素 | Dracula 色号 | 说明 |
-|------|-------------|------|
-| 关键字 | `#ff79c6` | def, class, if, for, import... |
-| 字符串 | `#f1fa8c` | "...", '...', """...""" |
-| 注释 | `#6272a4` | # 开头到行末 |
-| 数字 | `#bd93f9` | 整数、浮点数 |
-| 装饰器 | `#50fa7b` | @staticmethod 等 |
-| 内置函数 | `#8be9fd` | print, len, range... |
-
-### 运行按钮
-
-列表标题下方（左侧面板），`▶ 全量回测`（绿#1f883d）和 `▶ 运行选中`（蓝，调用时从ACCENT_BLUE取值）。点击后调用 `subprocess.Popen(f'start "标题" cmd.exe /k "cd /d {dir} && python ..."', shell=True)` 弹出新的 cmd 窗口。
-
----
-
-## 迭代历程
-
-| 版本 | 主题 | 问题 |
-|------|------|------|
-| v1 | 原版 `#0f172a/#1e293b` | 灰蒙蒙看不清 |
-| v2 | 高对比 `#000000/#ffffff` | 太刺眼，红绿大色块 |
-| v3 | 高级暗色 `#0a0a0c/#d4d4d8` | 又看不清了 |
-| v4 | 高对比 v2 `#0c0c0f/#ffffff` | 强调不够 |
-| v5 | VS Code 暗色 | 用户要 Monokai |
-| v6 | Monokai `#272822/#f8f8f2` | 用户要 Dracula |
-| v7 | Dracula 初版 | 选中行亮色看不清 |
-| v8 | Dracula + 选中行深色定稿 | OK |
-| v9 | Dracula + Python 语法高亮 + cmd窗口运行 | OK |
-
-### 关键教训
-
-1. **颜色要一次到位**：来回改配色比写代码还耗时。最好先确认主题（Dracula），再微调（选中色）。
-2. **红绿行着色被拒**：整行变红/绿来表示收益正负的做法用户认为"不高级"。改用中性交替行，保留红绿色号供指标文字使用。
-3. **三层底色必须有明显亮度梯度**：初始版本 BG 三阶层差 <10%，在普通显示器上全部糊成一片黑。最终版差距约 10%/15% 亮度阶梯（`#282a36 → #2d2f3e → #383a4a`），分层清晰可辨。
-4. **tag_configure 必须在 self.tree 创建之后调用**：否则报 `AttributeError: '_tkinter.tkapp' object has no attribute 'tree'`。
-5. **tkinter Treeview 不支持单列着色**：tag foreground 作用于整行，无法只给"总收益率"列单独着绿色。要么整行着色，要么不做。
-6. **subprocess 内嵌日志窗口不可行**：无控制台环境下 `subprocess.PIPE` 有编码/缓冲问题。改用 `start cmd.exe /k` 弹出原生 cmd 窗口更可靠。
-7. **FreeConsole + 延迟线程**：`FreeConsole()` + `ShowWindow(GetConsoleWindow(), 0)` 双重控制台隐藏，延迟 0.1s 确保窗口已创建。
+### 注意事项
+- 表格选中行 `#0000ff` 配合白色文字
+- 实盘标记 `#1a3a1a` 深绿底+白字
+- 图表（matplotlib Visualizer）保持独立的暗色主题，不受 GUI 配色影响
+- 按钮颜色用 BTN_TEAL/BTN_BLUE/BTN_PURPLE/BTN_RED 常量，比 ACCENT_* 稍深
