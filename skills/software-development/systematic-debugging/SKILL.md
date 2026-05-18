@@ -356,6 +356,11 @@ When fixing bugs:
 3. Fix the root cause (GREEN)
 4. The test proves the fix and prevents regression
 
+## Domain-Specific References
+
+For quant backtest anomaly debugging (a_stock_trade project), see:
+- `references/quant-backtest-debugging.md` — NAV anomaly patterns, alpha_mode daily rebalancing bug, limit up/down rules, verification checklist
+
 ## Real-World Impact
 
 From debugging sessions:

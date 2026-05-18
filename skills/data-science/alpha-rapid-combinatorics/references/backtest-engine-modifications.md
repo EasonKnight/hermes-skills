@@ -1,106 +1,60 @@
-# BacktestEngine 回测引擎修改记录
+# 回测引擎修改记录
 
-## 现金按中证1000指数计收益（防过拟合）
+## 2026-05-18: 印花税 + 基准修复
 
-### 改动文件
-`core/backtest_utils.py` — `BacktestEngine` 类
+### 印花税分买卖计算
 
-### 新增参数
+**改前**：统一 `cost_rate = commission + slippage = 0.0013` 不分买卖。
+
+**改后**：`STAMP_DUTY = 0.0005`（万分之五，仅卖出），分设两个成本率：
+- `buy_cost_rate = commission + slippage = 0.0013`
+- `sell_cost_rate = commission + slippage + stamp_duty = 0.0018`
+
+引擎中有 4 个成本计算点需要修改：
+1. 初始建仓（纯买入）→ `buy_cost_rate`
+2. 清仓（纯卖出）→ `sell_cost_rate`
+3. 重新部署（纯买入）→ `buy_cost_rate`
+4. 正常再平衡（买卖混合）→ 拆分为 `buy_sum × buy_rate + sell_sum × sell_rate`
+
+### 等权基准前视偏差修复
+
+**改前**：
 ```python
-BacktestEngine(..., index_returns=None)
+if first[t]:
+    portfolio = valid[:, t]   # 立即换新股票
+# 然后用新股票算当天的收益（前视偏差！）
+held = portfolio
+rets = close[held, t] / close[held, t-1] - 1
 ```
-- `index_returns`: ndarray (N_days,) 中证1000日收益率数组
-- 不传则自动从 akshare 下载 `sh000852`
 
-### 逻辑（`run()` 方法中主循环后）
-
+**改后**（先算收益再更新组合）：
 ```python
-# 每日的 cash_part = 1亿 - 昨日股票市值
-# pv[t] 加上 cash_part × 中证1000日收益率
-for t in range(1, n_days):
-    prev_stock_mv = np.sum(shares[:, t-1] * close[:, t-1])
-    cash_part = max(0, self.fixed_base - prev_stock_mv)
-    if cash_part > 0 and np.isfinite(self.index_returns[t]):
-        pv[t] += cash_part * self.index_returns[t]
+if t > 0:
+    held = portfolio  # 用旧组合算当天收益
+    rets = close[held, t] / close[held, t-1] - 1
+if first[t]:
+    portfolio = valid[:, t]  # 调仓日收盘才更新
 ```
 
-### 缓存机制
-- 首次加载时存 `self._csi1000_idx_close = idx_close`
-- `_compute_benchmark()` 中检查 `hasattr(self, "_csi1000_idx_close")`，有则直接复用
-- 避免 akshare 重复下载
+### 等权基准幸存者偏差修复
 
-### 影响
-- 策略即使有大量"空仓"日，现金部分仍按指数走，无法通过低仓位躲大跌
-- 适用于验证策略的真实风险调整后收益
+**改前**：`load_csi1000_codes()` 用当前成分股列表（775只）回溯整个10年。
 
-## amihud_illiq_fast 优化
-
-### 改动文件
-`core/alpha_utils.py`
-
-### 新增函数
+**改后**：使用 `index_stock_cons(symbol="000852")` 返回的 `纳入日期` 字段，每只股票只在进入指数后才计入基准：
 ```python
-def amihud_illiq_fast(amt, close, t, n=20):
-    """amihud_illiq 的预计算成交额版"""
-    start = max(0, t - n)
-    if t - start < 5:
-        return np.zeros(close.shape[0])
-    rets = close[:, start+1:t+1] / np.maximum(close[:, start:t], 1e-10) - 1
-    amt_win = amt[:, start+1:t+1]
-    ill = np.abs(rets) / amt_win
-    return np.nanmean(ill, axis=1)
+def get_csi1000_at_date(df, date):
+    return set(df[df["纳入日期"] <= pd.Timestamp(date)]["品种代码"].astype(str).str.zfill(6).tolist())
 ```
 
-### 使用方式
+**效果**：基准从 +224% 降到 +145%（10年），年化从 12.5% 降到 9.3%。
+
+### 等权基准增加交易成本
+
+每周调仓时按换手率扣除成本：
 ```python
-amt = np.maximum(close * volume, 1)  # 循环前算一次
-for t in range(20, n_d):
-    ill = amihud_illiq_fast(amt, close, t, 20)  # 循环内只切片
+turnover = (outgoing + incoming) / (old + new)
+avg_cost = commission + stamp_duty * 0.5
+daily_ret[t] -= turnover * avg_cost
 ```
 
-### 已优化的 8 个策略
-a212, a213, a215, a219, a264, a268, a269, a280
-
-## MIN_COVERAGE 变更
-
-### 改动文件
-`core/backtest_utils.py` — 模块常量
-
-### 当前值
-```python
-MIN_COVERAGE = 0.0  # 不限制，纳入全部 5203 只 A 股
-```
-
-### 影响
-- CSV 中有 5203 只股票
-- 覆盖率 90% 时只保留 2930 只（需上市 >9 年）
-- 设为 0 后全部保留
-- **必须删除 NPZ 缓存**：`rm data/a_stock_kline_3y.npz`
-
-## batch_run.py 单进程批量运行器
-
-### 文件位置
-`/c/Users/Mayn/Desktop/a_stock_trade/batch_run.py`
-
-### 用法
-```bash
-python batch_run.py                       # 全部策略
-python batch_run.py --tags alpha          # 按标签
-python batch_run.py --names a212 a219     # 按名字
-python batch_run.py --freq weekly         # 按频率
-```
-
-### 核心流程
-1. `DataLoader().load()` — 加载数据 1 次
-2. `importlib` 动态导入策略模块
-3. 调用 `module.generate_alpha(c, d, volume=v)` — 共享同一份数据
-4. `BacktestEngine.run()` + `Visualizer.plot_and_save()`
-5. 汇总到 `results/_summary_batch.csv` + 年化排名打印
-
-### 与 platform.py run 的区别
-| 特性 | platform.py run | batch_run.py |
-|------|----------------|--------------|
-| 运行方式 | 子进程隔离 | 单进程 |
-| 数据加载 | 每个策略 1 次 | 总共 1 次 |
-| 隔离性 | 高（进程隔离） | 低（共享模块） |
-| 速度 | 100 策略 ≈ 5 分钟 | 100 策略 ≈ 2-3 分钟 |
+实际影响很小（CSI1000 周频成分股变化小，换手~5%/周，成本~0.05%/周）。
