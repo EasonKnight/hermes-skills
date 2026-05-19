@@ -338,6 +338,18 @@ cronjob action=remove job_id=<id>
 
 Also remove the Hermes script file from `~/AppData/Local/hermes/scripts/` since it's no longer needed.
 
+### Interpreting Last Result codes
+
+After the task runs, check `Last Result` from `schtasks /query /tn "任务名" /fo LIST /v`:
+
+| Code | Meaning | Action |
+|------|---------|--------|
+| `0`  | Success | Nothing needed |
+| `1`  | Command/script not found or crashed | Check Python/binary paths in the batch file; run the batch manually from cmd.exe |
+| `2`  | The script ran but one of its internal commands returned exit code 2, or the final `echo`/`chcp` command happened to return 2. **Common false negative** — the batch file's work may have completed successfully despite the non-zero exit code. To fix, **always end batch files with `exit /b 0`** so the scheduled task always reports success. |
+
+**⛔ CRITICAL: Always add `exit /b 0` as the last line of any batch file used in a scheduled task.** Without it, Windows picks up whatever exit code the last internal command (`echo`, `chcp`, `findstr`, etc.) happened to leave, causing spurious failure alerts even when the actual work succeeded.
+
 ### Step 4: Verify
 
 ```bash

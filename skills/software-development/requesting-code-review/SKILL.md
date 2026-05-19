@@ -268,6 +268,14 @@ tests exist, tests pass, no regressions.
 
 **writing-plans:** Validates implementation matches the plan requirements.
 
+## Domain-Specific References
+
+For verifying large refactoring/restructuring projects (splitting monolithic
+files into modules), see:
+- `references/refactoring-verification.md` — Systematic equivalence check:
+  method inventory, attribute cross-reference, UI binding audit, import
+  resolution, dead code detection.
+
 ## Pitfalls
 
 - **Empty diff** — check `git status`, tell user nothing to verify

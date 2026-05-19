@@ -172,6 +172,50 @@ python core/update_data.py
 python core/update_data.py --force 20260501  # 强制从指定日期重下
 ```
 
+### NPZ 缓存重建
+
+更新完成后自动从 CSV 重建 NPZ 缓存（`_build_cache()`），而非简单地删除旧缓存。NPZ 结构同回测引擎的 `DataLoader._load_data()`，包含：
+
+```
+close, open, volume, high, low   → (n_stocks, n_days) float64
+codes                              → (n_stocks,)
+dates                              → (n_days,) datetime64[ns]
+names                              → (n_stocks,)
+is_st                              → (n_stocks,) bool
+exchange                           → (n_stocks,) str ("main"/"chinet"/"star"/"other")
+```
+
+构建耗时约 35-40 秒（~5241 只 A 股 × ~2427 个交易日，1.5GB CSV），完成后回测引擎直接读缓存无需再加载 CSV。
+
+### Pitfall: akshare 返回非 A 股代码（B 股/债券/基金）
+
+`ak.stock_info_a_code_name()` 返回的股票列表包含深市 B 股（`200xxx`）、沪市 B 股（`900xxx`）、各类债券（`1xx`/`5xx`/`7xx` 短代码）和基金。其中 B 股 200xx-299xx 区间约 1500 个代码会混入 CSV，导致 NPZ 中非 A 股占比 ~22%。
+
+**修复**：`get_all_stocks()` 和 `_build_cache()` 两处都须用 A 股前缀白名单过滤：
+
+```python
+a_prefixes = {"000","001","002","003","300","301","302","303",
+              "600","601","603","605","688"}
+if code[:3] not in a_prefixes:
+    continue
+```
+
+A 股有效前缀对应：深市主板（000-003）、创业板（300-303）、沪市主板（600-605）、科创板（688）。
+
+**清洗存量数据**：如果 CSV 已混入非 A 股数据，须用 pandas 按前缀过滤后重写 CSV 并重建 NPZ：
+
+```python
+df = pd.read_csv(csv, dtype={'股票代码': str})
+mask = df['股票代码'].str[:3].isin(a_prefixes)
+df[mask].to_csv(csv, index=False, encoding='utf-8-sig')
+```
+
+同时清理 `_update_progress.txt`、`_update_errors.txt`、`_update_log.txt` 等进度缓存，避免旧代码残留干扰后续增量更新。
+
+### 定时任务退出码
+
+`update_data.bat` 末尾应加 `exit /b 0` 兜底，避免 Windows 任务计划程序误报退出码 2（即使所有 Python 脚本成功）。
+
 ## Path Resolution & Pitfalls on Windows
 
 ### Pitfall: core/platform.py 与 stdlib platform 冲突

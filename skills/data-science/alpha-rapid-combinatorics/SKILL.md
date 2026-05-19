@@ -444,3 +444,5 @@ gl = close / np.maximum(max52, 0.5) - 1
 - `references/backtest-pv-anomalies.md` — 回测 PV 异常诊断指南（alpha_mode 首月幻觉修复）
 - `references/benchmark-survivorship-bias.md` — 中证1000基准幸存者偏差修复
 - `references/auto-dev-two-phase.md` — 自动研发按钮两阶段架构
+- `references/retail-behavior-alpha.md` — 散户行为逆向量价因子（追涨/恐慌反向）
+- `references/longhu-data-structure.md` — 龙虎榜数据结构和akshare接口（用于构建资金流/机构vs散户因子）

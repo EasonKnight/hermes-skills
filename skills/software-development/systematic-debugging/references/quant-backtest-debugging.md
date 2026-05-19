@@ -163,3 +163,35 @@ Checklist:
 - `results/<FOLDER>/nav.csv` — NAV series
 - `results/<FOLDER>/position_matrix.npz` — daily position values (for deep inspection)
 - `results/<FOLDER>/stats.csv` — summary statistics
+
+## Common Bug Patterns Found in Code Audits
+
+### Stale Duplicate File (`_backtest_utils.py`)
+
+`core/_backtest_utils.py` (1648 lines) is a near-duplicate of `core/backtest_utils.py` with different configs:
+- `_backtest_utils.py` uses `os.path.expanduser("~/Desktop/...")` instead of PROJECT_ROOT from app_config
+- `_backtest_utils.py` has `BACKTEST_START = "2016-05-17"` (10yr) vs correct `"2021-05-17"` (5yr)
+- Currently not imported by any module, but risk of confusion/accidental import
+
+### Duplicated `scan_strategies()` in Two Files
+
+`app_utils.py` and `data_loader.py` both define `scan_strategies()` with different filters:
+- `app_utils.py`: skips only `s31_tune.py`
+- `data_loader.py`: skips files starting with `_`, `tune_`, or containing `test`
+`app.pyw` imports from `app_utils` version. Inconsistency if other code uses `data_loader` version.
+
+### Dead Code in `show_detail()` STAT_KEYS Loop
+
+`app.pyw:1231-1242` iterates over `STAT_KEYS`, parses each value, computes a `tag` variable — then does nothing with `tag`. The loop body is pure dead code.
+
+### 夏普比率 Label Mismatch
+
+`backtest_utils.py:998` sets `stats["夏普比率"]` to the Information Ratio (not Sharpe ratio), with comment "超额夏普（替代原总收益夏普）". The label is misleading — users see "夏普比率" but get IR values.
+
+### `TradingRules._compute_limits()` Single-Day Fallback
+
+Line 259: `prev[prev == 0] = self.close[:, t][prev == 0]` — if close[t] is also 0, creates inf/nan. Edge case during complete suspension.
+
+### First-Day Limit Check Skipped
+
+`_compute_limit_status()` starts from `range(1, self.n_days)`, so t=0 has no limit_up/down filtering. New positions on day 0 will trade through theoretical limit-up stocks.

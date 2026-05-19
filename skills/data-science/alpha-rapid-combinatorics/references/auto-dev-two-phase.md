@@ -9,6 +9,10 @@
 ### Phase 1: Hermes 写代码
 
 `hermes -z` prompt 要求 agent **只写策略代码到 strategies/ 目录，不跑回测**。Prompt 核心约束：
+
+> ⚠️ **路径必须绝对**：`hermes -z` 将 prompt 作为纯文本参数传入，Hermes 进程不知道 CWD。不可用 `./` 或相对路径。必须在 prompt 文本中硬编码绝对路径（从 `PROJECT_ROOT` 动态生成，路径中的 `\` 需双写为 `\\`）。
+
+Prompt 核心约束：
 ```python
 "不要运行回测！只写代码文件。输出创建的文件名。"
 "POOL=CSI1000，元数据紧凑风格。不做任何表现分析。8分钟超时即交。"
