@@ -87,6 +87,7 @@ adjust: `"qfq"`=前复权, `"hfq"`=后复权.
 - `references/limit-price-data-sources.md` — 涨跌停价格数据源
 - `references/fundamental-data-download.md` — 基本面数据下载细节
 - `references/fundamentals-data-pipeline.md` — 基本面数据流水线完整文档
+- `references/windows-scheduled-tasks.md` — Windows 定时任务 (schtasks) 约定
 
 ---
 
@@ -172,20 +173,48 @@ python core/update_data.py
 python core/update_data.py --force 20260501  # 强制从指定日期重下
 ```
 
-### NPZ 缓存重建
+## NPZ 缓存
 
-更新完成后自动从 CSV 重建 NPZ 缓存（`_build_cache()`），而非简单地删除旧缓存。NPZ 结构同回测引擎的 `DataLoader._load_data()`，包含：
+全量下载 (`download_data.py`) 和增量更新 (`update_data.py`) 完成后**均自动构建**
+`data/a_stock_kline_3y.npz`，无需手动操作。构建函数逻辑一致（`_build_npz` /
+`_build_cache`）：
 
+1. 读取 CSV → pivot 透视 → 过滤 A 股前缀 → ffill 填充停牌 → `np.savez_compressed`
+2. 字段：`close, open, volume, high, low, codes, dates, names, is_st, exchange`
+3. 回测引擎 `DataLoader` 优先读 NPZ 缓存（0.1s vs CSV 的 6s）
+
+如果 CSV 已存在但 NPZ 缺失，再次运行 `download_data.py` 会在"全部完成"路径中
+自动检测并构建。
+
+### NPZ → CSV 回退原则（核心设计原则）
+
+**不要让 NPZ 格式拖累整个工程。** 每个需要加载 K 线数据的地方都必须：
+NPZ 优先（快）→ CSV 兜底（慢但总能工作）。
+
+| 加载点 | 文件 | 函数 | 回退链 |
+|--------|------|------|--------|
+| 回测数据 | `backtest_utils.py` | `DataLoader.load()` | NPZ → CSV → 自动重建 NPZ |
+| 股票映射 | `data_loader.py` | `load_stock_name_map()` | NPZ → JSON缓存 → CSV |
+| 股票映射 | `app_utils.py` | `load_stock_name_map()` | NPZ → JSON缓存 → CSV |
+| 状态栏显示 | `app.pyw` | `_update_data_status()` | NPZ → CSV |
+| 基本面展开 | `fetch_fundamentals.py` | `expand_to_daily()` | K线NPZ → K线CSV |
+| 基本面加载 | `data_loader.py` | `load_fundamentals()` | NPZ → None（调用方处理） |
+
+`_build_stock_map_from_csv()` 是 NPZ 缺失时的兜底函数，从 CSV 的 `股票代码/股票名称/close`
+列构建 `{code_int: [name, latest_close]}` 映射。两个文件（`data_loader.py` /
+`app_utils.py`）均已实现。
+
+### 进度文件陷阱
+
+`_update_progress.txt` 记录每只股票的最新更新日期。如果**手动删除了 CSV 中某日期的数据**
+（例如测试增量更新），必须**同步删除** `_update_progress.txt`，否则
+`update_data.py` 会错误地跳过所有"已完成"的股票，导致增量更新拉到 0 行新数据。
+
+正确步骤：
+```bash
+rm data/_update_progress.txt   # 必须先清进度
+python core/update_data.py     # 再运行更新
 ```
-close, open, volume, high, low   → (n_stocks, n_days) float64
-codes                              → (n_stocks,)
-dates                              → (n_days,) datetime64[ns]
-names                              → (n_stocks,)
-is_st                              → (n_stocks,) bool
-exchange                           → (n_stocks,) str ("main"/"chinet"/"star"/"other")
-```
-
-构建耗时约 35-40 秒（~5241 只 A 股 × ~2427 个交易日，1.5GB CSV），完成后回测引擎直接读缓存无需再加载 CSV。
 
 ### Pitfall: akshare 返回非 A 股代码（B 股/债券/基金）
 
@@ -218,17 +247,25 @@ df[mask].to_csv(csv, index=False, encoding='utf-8-sig')
 
 ## Path Resolution & Pitfalls on Windows
 
-### Pitfall: core/platform.py 与 stdlib platform 冲突
+### Pitfall: 项目文件与 stdlib 同名冲突（platform.py → runner.py）
 
-`core/platform.py` 内 `import pandas as pd`，pandas 依赖 `import platform`（stdlib）。
-运行 `python core/<script>.py` 时 `core/` 进入 `sys.path[0]` → 循环引用崩溃。
+**根因**：`core/platform.py` 与 stdlib `platform` 同名。当 akshare → pandas 执行
+`import platform` 时，Python 发现 `core/` 在 `sys.path` 中 → 导入项目文件而非
+标准库 → `AttributeError: module 'platform' has no attribute 'python_implementation'`。
 
-**修复**：
-```python
-import os, sys
-if sys.path and sys.path[0] == os.path.dirname(os.path.abspath(__file__)):
-    sys.path.pop(0)
-```
+**永久修复**：重命名 `core/platform.py` → `core/runner.py`，更新所有引用：
+
+| 文件 | 修改 |
+|------|------|
+| `core/platform.py` | → `core/runner.py`，docstring 中 `core.platform` → `core.runner` |
+| `app.pyw` | `python -m core.platform run` → `python -m core.runner run` |
+| `batch_run.py` / `run_all.py` | 注释中的 `platform.py` → `runner.py` |
+| `core/download_data.py` | 移除 `sys.path.pop(0)` workaround（不再需要） |
+| `core/update_data.py` | 同上 |
+| `core/fetch_fundamentals.py` | 同上 |
+| `core/update_fundamentals.py` | 同上 |
+
+**不推荐**旧方案（`sys.path.pop(0)` workaround）：治标不治本，每个新脚本都会踩坑。
 
 ### Pitfall: NPZ axis convention 混淆
 
@@ -250,23 +287,4 @@ if sys.path and sys.path[0] == os.path.dirname(os.path.abspath(__file__)):
 temp = download_all_quarters()
 expand_to_daily(temp)   # ✓ 先用
 os.remove(temp)         # ✓ 后删
-```
-
-### Pitfall: `最新公告日期` 不可信（最关键）
-
-`ak.stock_yjbb_em()` 的 `最新公告日期` 是**最后修订日期**，不是财务报告的实际首次披露日。例如平安银行2015年报API显示公告日2017-03-17，实际在2016年就已披露。
-
-**修复方案**：用季度末 + 法定披露时滞估算生效日期，不用 announce_date：
-
-| 报表 | 时滞 | 估算生效日 |
-|------|------|-----------|
-| 一季报/三季报 (Q1/Q3) | 45天 | 季度末+45天 |
-| 中报/半年报 (Q2) | 60天 | 季度末+60天 |
-| 年报 (Q4) | 120天 | 季度末+120天 |
-
-**修复效果**：2016年覆盖率 1% → **76%**，平安银行首个EPS从 t=227 → **t=0**（回测第一天就有数据），总覆盖率 80.0% → **92.9%**。
-
-### Pitfall: fetch_fundamentals.py 清理顺序thlib import Path
-DATA_DIR = Path.home() / "Desktop" / "a_stock_data"
-DATA_DIR.mkdir(parents=True, exist_ok=True)
 ```

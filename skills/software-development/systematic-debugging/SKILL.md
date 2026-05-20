@@ -361,6 +361,7 @@ When fixing bugs:
 For quant backtest anomaly debugging (a_stock_trade project), see:
 - `references/quant-backtest-debugging.md` — NAV anomaly patterns, alpha_mode daily rebalancing bug, limit up/down rules, verification checklist
 - `references/quant-code-audit.md` — Full-project bug sweep checklist: stale files, dead code, stats overwriting, edge cases in financial math, architecture mismatches, and common anti-patterns found in quant codebases.
+- `references/python-stdlib-shadowing.md` — Diagnosis and permanent fix for Python stdlib module shadowing (AttributeError due to local file with same name as stdlib module).
 
 ## Real-World Impact
 

@@ -968,6 +968,88 @@ class DarkScrollbar(Canvas):
 - `tree.tag_configure("total", font=(..., "bold"), foreground=ACCENT_TEAL)`
 - 合计值用千分位格式 `f"{total:,.0f}"`，合计行前景色用 `ACCENT_TEAL`
 
+### 3. 添加表头排序（带实时数据保留）
+
+两阶段：① 存储原始数据到 `self._pos_data`；② 排序时重新排 `_pos_data` 并刷新树。
+
+**初始化**（App.__init__ 或类属性）：
+```python
+self._pos_sort_col = "amount"   # 默认排序列
+self._pos_sort_rev = True       # 默认方向（降序）
+self._pos_data = []             # 缓存原始数据
+```
+
+**数据存储 + 表头箭头重置**（在数据刷新方法末尾保存并重置排序状态）：
+```python
+adjusted.sort(key=lambda x: x[3], reverse=True)  # 默认按金额降序
+self._pos_data = adjusted
+self._pos_sort_col = "amount"
+self._pos_sort_rev = True
+# 重置表头箭头
+for cid, ct, cw in POS_COLS:
+    arrow = " ▼" if cid == "amount" else ""
+    self.pos_tree.heading(cid, text=ct + arrow)
+self._populate_pos_tree()
+```
+
+**排序 + 渲染方法**（实时数据快照保留）：
+```python
+def _populate_pos_tree(self):
+    # ★ 快照当前实时涨跌幅（排序时不丢失 already-fetched data）
+    change_map = {}
+    for item in self.pos_tree.get_children():
+        vals = self.pos_tree.item(item, "values")
+        if len(vals) >= 6 and vals[5]:
+            change_map[vals[0].strip().zfill(6)] = vals[5]
+
+    for row in self.pos_tree.get_children():
+        self.pos_tree.delete(row)
+
+    # 按当前排序列排序
+    col = self._pos_sort_col
+    rev = self._pos_sort_rev
+    if col == "code":       adjusted_sorted = sorted(self._pos_data, key=lambda x: x[0], reverse=rev)
+    elif col == "pname":    adjusted_sorted = sorted(self._pos_data, key=lambda x: x[1], reverse=rev)
+    elif col == "lots":     adjusted_sorted = sorted(self._pos_data, key=lambda x: x[2], reverse=rev)
+    elif col == "price":    adjusted_sorted = sorted(self._pos_data, key=lambda x: x[5], reverse=rev)
+    elif col == "amount":   adjusted_sorted = sorted(self._pos_data, key=lambda x: x[3], reverse=rev)
+    elif col == "strategies": adjusted_sorted = sorted(self._pos_data, key=lambda x: len(x[4]), reverse=rev)
+    else:                   adjusted_sorted = self._pos_data
+
+    for code, name, lots, amount, strats, pps in adjusted_sorted:
+        # ★ 回填快照的涨跌幅
+        change_val = change_map.get(code.strip().zfill(6), "")
+        self.pos_tree.insert("", "end", values=(code, name, str(lots), ...,
+                                                change_val, strats_str))
+    # ... 合计条渲染 ...
+
+def sort_positions(self, col_id):
+    if col_id == self._pos_sort_col:
+        self._pos_sort_rev = not self._pos_sort_rev
+    else:
+        self._pos_sort_col = col_id
+        self._pos_sort_rev = (col_id != "code" and col_id != "pname")
+    # 更新表头箭头
+    for cid, ct, cw in POS_COLS:
+        arrow = ""
+        if cid == col_id:
+            arrow = " ▲" if not self._pos_sort_rev else " ▼"
+        self.pos_tree.heading(cid, text=ct + arrow)
+    self._populate_pos_tree()
+```
+
+**绑定表头点击**（在 Treeview 创建循环中）：
+```python
+for cid, ct, cw in POS_COLS:
+    self.pos_tree.heading(cid, text=ct, command=lambda c=cid: self.sort_positions(c))
+```
+
+**关键设计决策**：
+- **不重新聚合计算** — 排序只操作缓存的 `_pos_data`，不重新读取 NPZ 或重新等比缩仓
+- **快照保留实时数据** — 排序前扫描现有树项的涨跌幅列，按代码快照，重建后回填
+- **涨跌幅颜色重新来过** — 颜色标签（up/down）不需要保留，3 秒后的实时循环会重新设置
+- **数据刷新时重置排序** — `refresh_combined_positions()` 每次重算后重置为按金额降序，确保初始状态一致
+
 ### 股票代码显示：必须补0
 NPZ 缓存的股票代码去掉了前导0（`"19"` 实为 `000019`）。**所有股票代码显示路径必须用 `code.zfill(6)` 恢复**，包括 `calc_strat_positions()`、`refresh_combined_positions()`、`refresh_live_strat_detail()` 三处。
 
@@ -1477,6 +1559,101 @@ initialfile=f"组合持仓_{datetime.now():%Y%m%d}.csv"
 ```
 
 日期格式 `%Y%m%d`（如 `组合持仓_20260518.csv`），避免手动重命名。
+
+### 7. 加权涨跌列（组合持仓最后一列 + 底部合计条）
+
+在组合持仓表最后一列新增「加权涨跌」，每行显示该股对总组合的涨跌贡献（`该股市值/总市值 × 涨跌幅`），底部合计条显示总加权涨跌幅（带「合计」前缀）。该列**不参与排序**。
+
+**新增列完整步骤（6处同步修改）**：
+
+**① app.pyw — POS_COLS + Treeview columns（加权涨跌不绑排序命令）**
+```python
+POS_COLS = [..., ("strategies","涉及策略",100), ("weighted","加权涨跌",85)]
+self.pos_tree = ttk.Treeview(pos_sec,
+    columns=(..., "strategies", "weighted"), ...)
+for cid, ct, cw in POS_COLS:
+    cmd = None if cid == "weighted" else (lambda c=cid: self.sort_positions(c))
+    self.pos_tree.heading(cid, text=ct, command=cmd)
+    self.pos_tree.column(cid, width=cw, minwidth=cw, ...)
+```
+
+**② refresh_combined_positions — heading 循环同步加新列**
+```python
+for cid, ct, cw in [(...), ("strategies","涉及策略",100), ("weighted","加权涨跌",85)]:
+```
+
+**③ sort_positions — 列列表同步加 weighted**
+```python
+for cid, ct, cw in [(...), ("strategies","涉及策略",100), ("weighted","加权涨跌",85)]:
+```
+
+**④ _populate_pos_tree — 先算总市值 → 每行计算加权贡献 → 底部合计条**
+```python
+# 先算总市值（用于加权涨跌）
+total_lots = sum(x[2] for x in adjusted_sorted)
+total_amt = sum(x[3] for x in adjusted_sorted)
+wret_total = 0.0
+rows = []
+for code, name, lots, amount, strats, pps in adjusted_sorted:
+    change_val = change_map.get(code.strip().zfill(6), "")
+    wval_str = ""
+    if change_val and change_val != "—":
+        try:
+            pct = float(change_val.replace("%", "").replace("+", ""))
+            w = (amount / total_amt) * pct if total_amt > 0 else 0
+            wret_total += w
+            sign_w = "+" if w >= 0 else ""
+            wval_str = f"{sign_w}{w:.2f}%"
+        except ValueError:
+            pass
+    rows.append((..., change_val, strats_str, wval_str))  # 8值元组
+for r in rows:
+    self.pos_tree.insert("", "end", values=r)
+# 底部合计条索引偏移：涨跌幅[5]空 → 涉及策略[6]分配 → 加权涨跌[7]合计
+self.pos_bar_lbls[5].config(text="")
+self.pos_bar_lbls[6].config(text=f"分配 ¥{total_alloc:,.0f}")
+self.pos_bar_lbls[7].config(text=f"合计 {sign}{wret_total:.2f}%", fg=wcolor)
+```
+
+**⑤ _fetch_realtime_changes._update — 两遍扫描计算每行加权贡献**
+```python
+def _update():
+    # 第一遍：收集涨跌幅和总市值
+    items_data = []
+    total_amt = 0.0
+    for item in self.pos_tree.get_children():
+        vals = list(self.pos_tree.item(item, "values"))
+        # ... 更新 vals[5] = pct_str ...
+        amt = float(vals[4].replace(",", ""))  # 反解析千分位
+        total_amt += amt
+        pct_val = float(pct_str...) if pct_str and pct_str != "—" else 0.0
+        items_data.append((item, vals, tags, amt, pct_val))
+    # 第二遍：计算每行加权贡献并写入 vals[7]
+    wret = 0.0
+    for item, vals, tags, amt, pct_val in items_data:
+        wval_str = ""
+        if pct_val != 0 and total_amt > 0:
+            w = (amt / total_amt) * pct_val
+            wret += w
+            wval_str = f"{'+' if w >= 0 else ''}{w:.2f}%"
+        while len(vals) < 8:
+            vals.append("")
+        vals[7] = wval_str
+        self.pos_tree.item(item, values=tuple(vals), tags=tags)
+    self.pos_bar_lbls[7].config(text=f"合计 {sign}{wret:.2f}%", fg=wcolor)
+```
+
+**⑥ export_positions_csv — header 补全**
+```python
+w.writerow(["股票代码", "股票名称", "总手数", "参考价", "总市值", "涨跌幅", "涉及策略", "加权涨跌"])
+```
+
+**关键设计要点**：
+- 加权涨跌列 heading 不绑排序命令（`command=None`），排序时该列被跳过
+- `_populate_pos_tree` 中必须先算 `total_amt`，再逐行计算 `(amount / total_amt) * pct`
+- 实时更新必须**两遍扫描**：第一遍收集所有行的 `amt` 和 `pct_val` 算出 `total_amt`，第二遍才能正确计算每行权重并写入 `vals[7]`
+- `pos_bar_lbls` 索引随 POS_COLS 新增列右移
+- 涨红 `#f85149` / 跌绿 `#56d364`
 
 ### 5. 实盘策略表「最新信号」列
 

@@ -65,14 +65,12 @@ CSV **股票代码** 列默认为 `int64`（如 `45`），akshare 返回 `str("0
 df["股票代码"] = df["股票代码"].apply(lambda x: f"{int(x):06d}")
 ```
 
-### 2. core/platform.py 循环引用
+### 2. core/platform.py 命名冲突 [已永久修复]
 
-`core/platform.py` 与 stdlib `import platform` 冲突。脚本开头需移除 `sys.path[0]`：
-```python
-_script_dir = os.path.dirname(os.path.abspath(__file__))
-if sys.path and sys.path[0] == _script_dir:
-    sys.path.pop(0)
-```
+~~`core/platform.py` 与 stdlib `import platform` 冲突。~~
+
+已于 2026-05-19 永久修复：`core/platform.py` → `core/runner.py`，不再需要任何
+workaround。详见 SKILL.md 的 Path Resolution & Pitfalls 章节。
 
 ### 3. CSV 编码损坏
 
@@ -85,7 +83,23 @@ df = df[df["date"].str.match(r"^\d{4}-\d{2}-\d{2}$", na=False)]
 
 必须使用 `mp.get_context("spawn")`，akshare 内部用 `py_mini_racer` 解析 JS。
 
-## 验证
+### 5. _update_progress.txt 与手动删数据冲突
+
+当手动从 CSV 删除部分交易日数据（如测试增量更新时），`update_data.py` 仍会从
+`_update_progress.txt` 读取各股票的上次更新状态，认为这些股票已覆盖到最新日期，
+导致 `todo_stocks` 为空，实际上不会重新下载已删除的日期数据。
+
+**修复**：手动删 CSV 数据后，必须同时删除 `_update_progress.txt`：
+
+```bash
+rm -f data/_update_progress.txt
+```
+
+否则 `update_data.py` 会输出 `"检测到上次进度: XXXX 只已完成，跳过"` 并跳过
+所有股票。此时增量更新虽完成但 `新增 0 条记录`，CSV 中仍缺失已删数据。
+
+**注意**：`_update_progress.txt` 与 `download_data.py` 的 `_progress.txt` 是
+两个不同的文件，互不影响。
 
 运行后检查：
 1. CSV 行数应增加（非周末运行，且确实有新的交易日数据）

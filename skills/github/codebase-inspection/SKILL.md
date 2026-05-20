@@ -229,10 +229,28 @@ Per file, ask:
 | 🔴 Critical | Fix immediately, explain why |
 | ⚠️ Ambiguous | Present with tradeoffs, let user decide |
 
-## Reference File
+### G. Zero-Division Audit
 
-For quant backtest-specific debugging patterns (NAV anomalies, alpha_mode rebalancing bugs, limit up/down rules), see the `systematic-debugging` skill's reference:
-- `references/quant-backtest-debugging.md`
+For numpy-heavy quant code, add a targeted scan for unprotected division operations:
+
+```bash
+# Find all division operations
+grep -n '/ [a-zA-Z_]' core/*.py strategies/*.py | grep -vE '#|http|1e-|np.maximum|np.where'
+```
+
+Classify each site:
+- `np.maximum(d, 1e-10)` → safe
+- `np.where(cond, ..., 0)` → safe (but numpy still evaluates both branches — verify divisor can't be 0)
+- `if d > 0:` → safe (Python-level guard)
+- Raw `a / b` → trace upstream: is `b` pre-clamped? guarded by earlier `if`?
+
+Fix pattern: `a / np.maximum(b, 1e-10)`
+
+See `references/zero-division-audit.md` for the complete technique.
+
+## Reference Files
+
+- **`references/zero-division-audit.md`** — Systematic audit for unprotected division-by-zero in numpy code. Covers: grep patterns, classification, context analysis, fix patterns, and common quant code failure modes.
 
 ---
 

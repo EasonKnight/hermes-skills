@@ -209,6 +209,80 @@ git remote set-url origin https://<token>@github.com/user/repo.git
 - The cron scheduler evaluates cron syntax correctly but the job will only execute while the Hermes daemon is alive
 - For OS-native scheduling on Windows, use Task Scheduler instead as a fallback
 
+### Schtasks batch file path resolution
+
+**⛔ `python` (bare name) does NOT resolve through user PATH when running under schtasks.** The scheduled task environment is stripped — it does NOT load the user's full `%PATH%` from their interactive shell. Using just `python script.py` produces **exit code 255** (task failed to start).
+
+**Fix:** Always use absolute paths to every executable in batch files registered with schtasks:
+
+```batch
+set PY="C:\\Users\\Mayn\\AppData\\Local\\Programs\\Python\\Python311\\python.exe"
+%PY% core\\script.py
+```
+
+Or inline:
+```batch
+"C:\\Users\\Mayn\\AppData\\Local\\Programs\\Python\\Python311\\python.exe" core\\script.py
+```
+
+Verify the full path from a **fresh `cmd.exe`** (not from bash/PowerShell) before registering the task. If it fails there, it will fail silently in the scheduled task.
+
+### Batch file encoding: UTF-8 Chinese characters kill cmd.exe
+
+**⛔ CRITICAL: cmd.exe does NOT handle UTF-8 Chinese characters in batch files.** Using the `write_file` tool writes UTF-8 by default, which causes the entire batch file to fail silently when run via schtasks (exit code 255, empty log files, no echoed output).
+
+- The `write_file` tool and `cat > file << 'EOF'` both produce UTF-8 (git-bash)
+- cmd.exe on Chinese Windows expects GBK/ANSI. UTF-8 Chinese characters get garbled
+- Even `echo` statements with Chinese text break the entire file — cmd.exe can't parse past them
+- Symptoms: schtasks returns Last Result 255, log file is empty, manual test from cmd.exe shows garbled text and "not recognized as an internal or external command" errors
+
+**✅ Fix — use ASCII-only English in every batch file run via schtasks:**
+```batch
+@echo off
+echo [%date% %time%] START > "C:\path\to\log.txt"
+cd /d "C:\path\to\project"
+"C:\Users\Mayn\AppData\Local\hermes\hermes-agent\venv\Scripts\python.exe" script.py >> "C:\path\to\log.txt" 2>&1
+echo [%date% %time%] DONE code=%ERRORLEVEL% >> "C:\path\to\log.txt"
+exit /b 0
+```
+
+Write the file using `cat > file.bat << 'BATEOF' ... BATEOF` in git-bash (produces UTF-8 without BOM, safe for ASCII-only content). Avoid the `write_file` tool for batch files.
+
+### Python venv selection
+
+Different Python installations may or may not have the required packages. Verify before deploying:
+
+```batch
+:: Check which Python has akshare (or other required packages):
+"C:\Users\Mayn\AppData\Local\hermes\hermes-agent\venv\Scripts\python.exe" -c "import akshare; print('ok')"
+"C:\Users\Mayn\AppData\Local\Programs\Python\Python311\python.exe" -c "import akshare; print('ok')"
+```
+
+System Python311 usually lacks quant packages. The hermes venv has them all. Always test the specific Python path before using it in a batch file.
+
+### Testing workflow
+
+1. Write the batch file with ASCII-only content
+2. Manual test: `cmd.exe /c "C:\path\to\script.bat"` — check log file immediately
+3. Create a one-shot test task for the exact time the daily task will run:
+   ```batch
+   schtasks /create /tn "测试" /tr "C:\path\to\script.bat" /sc once /st HH:MM /ru USERNAME
+   ```
+4. Wait for it to run, then check:
+   ```batch
+   schtasks /query /fo LIST /v /tn "测试"  | findstr "Result"
+   type C:\path\to\log.txt
+   ```
+5. Delete the test task: `schtasks /delete /tn "测试" /f`
+6. Only after test passes, update/create the daily task
+
+### Diagnosing "Last Result 0, log empty"
+
+This is a **encoding problem**, not a path problem:
+- Last Result 0 means the batch file parsed and exited normally
+- Empty log means `echo` commands failed — because UTF-8 Chinese text broke the redirect
+- Fix: rewrite the entire batch file with ASCII-only English characters
+
 ## Migrating to Windows Task Scheduler
 
 When the user prefers OS-native scheduling, migrate Hermes cron jobs to Windows Task Scheduler.
@@ -347,6 +421,7 @@ After the task runs, check `Last Result` from `schtasks /query /tn "任务名" /
 | `0`  | Success | Nothing needed |
 | `1`  | Command/script not found or crashed | Check Python/binary paths in the batch file; run the batch manually from cmd.exe |
 | `2`  | The script ran but one of its internal commands returned exit code 2, or the final `echo`/`chcp` command happened to return 2. **Common false negative** — the batch file's work may have completed successfully despite the non-zero exit code. To fix, **always end batch files with `exit /b 0`** so the scheduled task always reports success. |
+| `255` | Task failed to start — the executable/command in `/tr` could not be found or launched | **Use absolute paths for ALL executables.** `python` (bare name) does NOT resolve through the user's PATH when running under schtasks — the scheduled task environment differs from your interactive shell. Always write `C:\Users\<user>\AppData\Local\Programs\Python\Python311\python.exe` instead of just `python`. Verify the full path works by running the command directly from `cmd.exe`. |
 
 **⛔ CRITICAL: Always add `exit /b 0` as the last line of any batch file used in a scheduled task.** Without it, Windows picks up whatever exit code the last internal command (`echo`, `chcp`, `findstr`, etc.) happened to leave, causing spurious failure alerts even when the actual work succeeded.
 
@@ -386,3 +461,5 @@ See `scripts/sync-template.sh` for the exact script template used in this skill.
 
 See `references/hermes-skills-backup-to-github.md` for a complete worked example:
 backing up Hermes skills/config/profiles to GitHub with daily Windows Task Scheduler.
+
+See `references/schtasks-batch-debugging.md` for batch file debugging and the exit-code-255 diagnosis guide.
