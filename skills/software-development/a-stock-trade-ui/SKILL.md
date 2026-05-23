@@ -2108,6 +2108,16 @@ def read_stats(csv_path):
 
 最佳实践：迁移后运行一次全量回测列表刷新，观察统计数据是否正常显示。
 
+## Pitfall: 券商导出 .xls 实为 GBK TSV
+
+券商（同花顺/通达信等）导出的 `table.xls` 扩展名虽是 `.xls`，但**不是 Excel 文件**——是 GBK 编码的 Tab 分隔文本。`pd.read_excel()` 会报 `Excel file format cannot be determined`。
+
+正确读取: `pd.read_csv("table.xls", sep="\t", encoding="gbk")`
+
+持仓单位: `股票余额` 是 **股**（1股=1单位）。与策略导出的 `总手数`（1手=100股）单位不同，混用会导致数量计算错误。
+
+详细列名和格式见 `references/brokerage-export-formats.md`。
+
 ## 关联参考文件
 
 | 文件 | 内容 |
@@ -2118,6 +2128,7 @@ def read_stats(csv_path):
 | `references/auto-develop-visible-terminal.md` | 自动研发 visible 终端模式 |
 | `references/editable-treeview-cell.md` | Treeview 可编辑单元格 |
 | `references/last-position-date.md` | 策略最后持仓日期的读取 |
+| `references/brokerage-export-formats.md` | 券商导出文件格式（table.xls 实为 GBK TSV，非 Excel） |
 | `references/realtime-stock-quotes.md` | 新浪免费实时行情 API 接入模式（含代码格式/响应解析） |
 | `references/resource-leak-audit.md` | 资源泄漏审计 |
 | `references/stock-code-leading-zeros.md` | 股票代码前导零修复 |
