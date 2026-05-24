@@ -8,14 +8,60 @@
 
 ### Phase 1: Hermes 写代码
 
-`hermes -z` prompt 要求 agent **只写策略代码到 strategies/ 目录，不跑回测**。Prompt 核心约束：
+`hermes -z` prompt 要求 agent **只写策略代码到 strategies/ 目录，不跑回测**。
 
-> ⚠️ **路径必须绝对**：`hermes -z` 将 prompt 作为纯文本参数传入，Hermes 进程不知道 CWD。不可用 `./` 或相对路径。必须在 prompt 文本中硬编码绝对路径（从 `PROJECT_ROOT` 动态生成，路径中的 `\` 需双写为 `\\`）。
+> ⚠️ **路径必须绝对**：`hermes -z` 将 prompt 作为纯文本参数传入，Hermes 进程不知道 CWD。不可用 `./` 或相对路径。必须在 prompt 文本中硬编码绝对路径（从 `PROJECT_ROOT` 动态生成，路径中的 `\\` 需双写为 `\\\\`）。
 
-Prompt 核心约束：
+#### 推荐 Prompt 结构（2026-05-23 优化）
+
+提示词是"任务书"而非"操作手册"（操作手册由 skill 提供）。高质量 prompt = 8 个板块：
+
+```
+你是 alpha 工厂，不是分析师。加载 alpha-rapid-combinatorics skill，按以下任务书执行：
+
+【任务】生成 2~3 个 CSI1000 周频 alpha 策略，方向必须互不相同
+
+【环境】
+  项目根目录: <绝对路径>
+  数据: data/a_stock_kline_3y.npz（close/open/high/low/volume，5203股×2426日）
+  因子工具: core/alpha_utils.py
+  策略模板: 参考 strategies/ 下已有的 a5xx_*_weekly.py 文件
+
+【可用批处理函数】（全部 (N_stocks, N_days) 矩阵运算，零 for 循环）
+  ret_n_batch / vol_n_batch / amihud_illiq_batch / amount_ratio_batch
+  price_position_batch / decay_linear_batch / zscore_rank_matrix / forward_fill_alpha
+  组合模式: 比率 / 加法 / 乘法 / 杠铃
+
+【铁律】
+  1. generate_alpha() 零 Python for 循环 — 全用 *_batch 函数
+  2. sliding_window_view 前 pad n−1 列（非 n 列！）
+  3. forward_fill_alpha 对索引做 accumulate，不对 alpha 值做 accumulate
+  4. 不要重复已有策略的方向
+
+【创意引导 — 优先探索未知领域】
+  ▸ 成交额分档杠铃 / 波动率期限结构 / 反转非对称 / 量价背离 / 尾盘效应 / 缩量放量
+
+【避坑清单 — 以下方向已验证无效，不要浪费时间】
+  K线形态 / 彩票效应(MAX) / 动量加速度 / 趋势弯曲度 / 残差动量 / ...
+
+【输出规范】
+  文件名: aXXX_描述_weekly.py / 元数据紧凑一行 / 只输出文件名 / 8分钟超时即交
+```
+
+**各板块作用**：
+- **角色**：防止 agent 花时间分析表现（那不是它的工作）
+- **任务**：明确数量、池子、频率、多样性要求
+- **环境**：路径（绝对！）、数据字段、工具路径 — 省去 agent 自己探索
+- **批处理函数**：列出可用的 `*_batch` 函数名 — agent 无需猜测有哪些工具
+- **铁律**：烧过的坑（padding、accumulate bug）直接写进 prompt 防复发
+- **创意引导**：6 个未探索方向，每次研发都试探新领域，避免反复产出同类因子
+- **避坑清单**：已知死路直接排除，8 分钟不浪费在已验证无效的方向上
+- **输出规范**：命名、元数据风格、交付物格式 — 和 Phase 2 回测管线对齐
+
+旧版简洁 fallback（文本框为空时使用）：
 ```python
-"不要运行回测！只写代码文件。输出创建的文件名。"
-"POOL=CSI1000，元数据紧凑风格。不做任何表现分析。8分钟超时即交。"
+"你是 alpha 工厂。加载 alpha-rapid-combinatorics skill，生成 2~3 个 CSI1000 周频 alpha 策略，"
+"方向互不相同。全矩阵向量化（零 for 循环），8分钟即交。只输出文件名，不做表现分析。"
 ```
 
 Hermes 启动前拍快照 `before_files = set(glob("strategies/*.py"))`。
