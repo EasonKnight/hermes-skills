@@ -9,7 +9,7 @@ tags:
   - registry
   - system-maintenance
 trigger: User asks to "remove", "clean", "delete", "uninstall", or "wipe" an application / program / game / software from Windows.
-version: 1.0
+version: 1.1
 ---
 
 # Windows Application Removal
@@ -69,7 +69,42 @@ reg query "HKCU\Software\Microsoft\Windows\CurrentVersion\Run" /s 2>/dev/null | 
 reg query "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Run" /s 2>/dev/null | grep -i "<appname>" || echo "No HKLM startup entry"
 ```
 
-### 1d — Disable startup entries (for ongoing autostart)
+### 1d — IME / Input Method apps (TSF TIP)
+
+Windows Input Method Editors (IME) do NOT register through normal Uninstall entries. Instead they register as TSF Text Input Processors. Use this PowerShell detection script (save as `.ps1`):
+
+```powershell
+# List all installed IME CLSIDs with descriptions
+Get-ChildItem "HKLM:\SOFTWARE\Microsoft\CTF\TIP" -ErrorAction SilentlyContinue | ForEach-Object {
+    $clsid = $_.PSChildName
+    $desc = ""
+    try { $desc = (Get-ItemProperty "$($_.PSPath)\Category\Category{34745C63-B2F0-4784-8B67-5E12C8701A31}" -ErrorAction SilentlyContinue).'0409' } catch {}
+    if (-not $desc) {
+        try { $desc = (Get-ItemProperty "$($_.PSPath)\Category\Category{34745C63-B2F0-4784-8B67-5E12C8701A31}" -ErrorAction SilentlyContinue).'0804' } catch {}
+    }
+    Write-Host "CLSID: $clsid  Desc: $desc"
+}
+
+# Also check user language list for registered IME tips
+Get-WinUserLanguageList | ForEach-Object {
+    Write-Host "Language: $($_.LanguageTag) | IMEs: $($_.InputMethodTips -join ', ')"
+}
+```
+
+If a target CLSID is found, check its registry subtree and Appx package:
+```powershell
+# Full registry dump for a TIP CLSID
+reg query "HKLM\SOFTWARE\Microsoft\CTF\TIP\{CLSID}" /s
+
+# Check if it's a Store app
+Get-AppxPackage | Where-Object { $_.InstallLocation -like "*<appname>*" }
+```
+
+Common IME CLSIDs (for reference, do NOT delete built-in ones):
+- `{81D4E9C9-1D3B-41BC-9E6C-4B40BF79E35E}` — Microsoft Pinyin (built-in, do NOT remove)
+- `{FA550B04-5AD7-411F-A5AC-CA038EC515D7}` — Microsoft Wubi (built-in, do NOT remove)
+
+### 1e — Disable startup entries (for ongoing autostart)
 
 If the goal is to **clean up after uninstall** rather than remove the app, disable its Run entries:
 
@@ -275,9 +310,12 @@ public class RebootDelete {
 - **`MoveFileEx MOVEFILE_DELAY_UNTIL_REBOOT`** (Approach C) fails with ERROR_ACCESS_DENIED (5) unless running as admin.
 - **`find` on git-bash** may silently succeed if you search a non-existent path. Always check `|| echo "Not found"` after each find call.
 - **Registry entries in HKLM** (Software\Microsoft\Windows\CurrentVersion\Uninstall) usually require admin to delete. HKCU entries do not.
+- **IME apps (input methods) do NOT appear in Uninstall registry.** They register through `HKLM\SOFTWARE\Microsoft\CTF\TIP\{CLSID}` and in `Get-WinUserLanguageList`. To detect them, use the IME detection script in Step 1d. To remove them: for Store-based IMEs, use `Remove-AppxPackage`; for traditional IMEs, remove their TIP CLSID registration and unregister from the language list via `Set-WinUserLanguageList`.
+- **Chinese app names may differ from their internal codename.** Example: 微信输入法 is internally `WeType`. Always search multiple name variations. See `references/tencent-app-names.md` for common Tencent product naming quirks.
 
 ## Linked Files
 
+- **`references/tencent-app-names.md`** — Tencent product naming conventions: internal codename vs display name mappings for WeChat, WeType/微信输入法, WeGame, QQ/QQNT. Consult when the user asks to remove a Tencent product.
 - **`references/wegame-cleanup-example.md`** — Concrete walkthrough of a complete WeGame removal, including locked-file resolution via RunOnce deferral. Read this for a worked example before starting a new cleanup.
 - **`templates/runonce-cleanup.bat`** — Reusable batch file template for deferred deletion of locked files on next login. Copy, edit the paths, register via `reg add` under RunOnce.
 - **`templates/runonce-setup-helper.bat`** — Helper .bat to register a cleanup script in RunOnce. Use this instead of calling `reg add` directly from git-bash, which is prone to quoting errors.
