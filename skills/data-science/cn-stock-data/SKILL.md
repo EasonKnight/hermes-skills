@@ -1,9 +1,9 @@
 ---
 name: cn-stock-data
-title: Chinese Stock Market Data (A-Share)
-description: "Download, filter, and manage A-share stock K-line data AND financial/fundamental data from Chinese data sources (baostock, akshare)"
-trigger: user asks for A-share stock data, K-line, OHLC data, financial data, fundamentals, 基本面, 财务数据, Chinese stock market historical prices
-tags: [finance, stocks, a-share, k-line, baostock, data-acquisition]
+title: Chinese Financial Market Data (A-Share + Futures)
+description: "Download, filter, and manage Chinese financial market data — A-share stock K-line AND fundamentals, plus Chinese futures K-line (daily/minute). Covers baostock, akshare, and multi-process batch download patterns for both stocks and futures."
+trigger: user asks for A-share stock data, K-line, OHLC data, financial data, fundamentals, 基本面, 财务数据, Chinese futures data, 期货数据, CTA data, commodity futures, index futures, Chinese stock market historical prices, or multi-process Chinese financial data download
+tags: [finance, stocks, a-share, futures, k-line, baostock, data-acquisition, cta, multi-process]
 ---
 
 # Chinese Stock Market Data (A-Share)
@@ -155,6 +155,32 @@ roe_z = zscore_rank(fund["roe"][:, t], v)  # [:, t] 取 t 日截面
 | 展开耗时 | ~10 秒 |
 | NPZ 大小 | 10MB（float32 + 重复值高压缩比 63x） |
 | CSV 抽样 | 29MB（每季度末一天 x 5203 只，42个交易日） |
+
+---
+
+---
+
+## Futures Market Data
+
+Chinese futures K-line data (daily continuous contracts + 5-min intraday) is also available
+via the same akshare → Sina Finance free source. Covers all 76 products across 6 exchanges
+(SHFE, DCE, CZCE, CFFEX, INE, GFEX).
+
+For the full futures symbol table, contract month rules, multi-process minute-data batch
+download script, and futures-specific pitfalls, see `references/futures-market-data.md`.
+
+**Quick example — daily continuous contract:**
+```python
+import akshare as ak
+df = ak.futures_zh_daily_sina(symbol="RB0")  # RB0 = rebar continuous
+df = ak.futures_zh_minute_sina(symbol="RB2005", period="5")  # 5-min bars
+```
+
+The same multi-process batch download pattern (`spawn` context, `Pool.imap_unordered`,
+progress files, resume support) used for stocks also applies to futures minute data.
+
+**Critical rule**: Keep futures data projects **separate** from stock projects
+(`a_stock_trade`). Do not mix or reference files across domains.
 
 ---
 
