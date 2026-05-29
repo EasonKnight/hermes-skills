@@ -89,6 +89,21 @@ git config --global credential.helper 'cache --timeout=28800'
 git remote set-url origin https://<username>:<token>@github.com/<owner>/<repo>.git
 ```
 
+**Alternative: write credentials file directly (most reliable on Windows)**
+
+On Windows git-bash, `git credential approve` often fails with `fatal: unable to read credential from stdin`. Writing `~/.git-credentials` directly bypasses this:
+
+```bash
+# Ensure credential.helper is set to store
+git config --global credential.helper store
+
+# Write credentials directly to the file
+echo "https://<username>:<token>@github.com" > ~/.git-credentials
+
+# Verify
+git ls-remote https://github.com/<username>/<repo>.git
+```
+
 **Step 3: Configure git identity**
 
 ```bash
@@ -245,3 +260,4 @@ fi
 | Credentials not persisting | Check `git config --global credential.helper` — must be `store` or `cache` |
 | Multiple GitHub accounts | Use SSH with different keys per host alias in `~/.ssh/config`, or per-repo credential URLs |
 | `gh: command not found` + no sudo | Use git-only Method 1 above — no installation needed |
+| `git credential approve` fails with "unable to read credential from stdin" (Windows) | Write `~/.git-credentials` directly: `echo "https://user:token@github.com" > ~/.git-credentials` — bypasses the pipeline issue |
