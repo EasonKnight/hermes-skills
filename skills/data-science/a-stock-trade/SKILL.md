@@ -98,9 +98,11 @@ When removing any UI element (Frame/Text/Button), check ALL references:
 ### Data Pipeline Rules
 - A-share prefix whitelist: `{"000","001","002","003","300","301","302","303","600","601","603","605","688"}`
 - Filter in BOTH `get_all_stocks()` AND `_build_cache()` — otherwise NPZ has 6691 stocks instead of ~5241
-- NPZ rebuild runs in `update_data.py` after download (~35s)
+- NPZ rebuild runs in `update_data.py` after download (~35s); calls `drop_duplicates` to handle CSV dupes from force mode
 - `update_data.bat` must end with `exit /b 0` for Task Scheduler
-- Progress files: delete `_update_progress.txt` before forcing re-download
+- **Safe flush pattern**: Write CSV first, THEN save progress — never the reverse (see `references/data-pipeline.md`)
+- **Progress/error files**: All data scripts must clean progress+error files on completion or at start of next run — otherwise they grow unboundedly and poison subsequent runs
+- **Cross-file audit**: When modifying any data script, check ALL of `update_data.py`, `download_data.py`, `update_fundamentals.py`, `data_loader.py` for the same patterns (safe flush, file cleanup, encoding consistency, log_fh try/finally) — see checklist in `references/data-pipeline.md`
 - `platform.py` renamed to `runner.py` to avoid stdlib name collision
 
 ### Import/Thread Safety
@@ -130,7 +132,10 @@ Dark modern theme with constants in `core/app_config.py`. See `references/gui-co
 | Click double-1 crashes on blank area | No guard for empty/total rows | identify_row → skip total → try/except |
 | Live strategy stuck "⏳ 持仓计算中..." | CSV→NPZ migration missed app.pyw copy | Delegate to core.data_loader |
 | `import platform` loads our file | `core/platform.py` shadows stdlib | Renamed to `core/runner.py` |
-| Batch file exit code 2 | Missing `exit /b 0` at end | Always add explicit exit |
+| Force update adds 0 rows | Force mode filter uses `> latest_for_stock` instead of `>= download_start` | Force mode: filter by `>= download_start`, not per-stock latest |
+| Progress file poisons updates | `_clean_progress()` missing from early-exit paths | Add `_clean_progress()` on all 4 exit paths |
+| Error/log files grow to GBs | Never cleaned between runs | Delete at start of each run (`os.remove` before work) |
+| Crash loses data permanently | Progress saved before CSV flush | Safe flush: CSV first, progress second |
 
 ## References
 

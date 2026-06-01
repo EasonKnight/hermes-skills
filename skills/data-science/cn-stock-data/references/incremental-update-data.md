@@ -83,27 +83,74 @@ df = df[df["date"].str.match(r"^\d{4}-\d{2}-\d{2}$", na=False)]
 
 必须使用 `mp.get_context("spawn")`，akshare 内部用 `py_mini_racer` 解析 JS。
 
-### 5. _update_progress.txt 与手动删数据冲突
+### 5. _update_progress.txt 与手动删数据冲突 [已修复：代码自动清理]
 
-当手动从 CSV 删除部分交易日数据（如测试增量更新时），`update_data.py` 仍会从
-`_update_progress.txt` 读取各股票的上次更新状态，认为这些股票已覆盖到最新日期，
-导致 `todo_stocks` 为空，实际上不会重新下载已删除的日期数据。
+**历史根因**：`_update_progress.txt` 用于断点续传，但从未在更新完成后清理。一次全量更新
+（如 5,193 只全部处理）后，进度文件记录了所有 5,193 个代码。后续增量更新 `load_done_set()`
+读入后跳过全部，只剩新上市股票（14-28 只）被处理。表现为：
+- CSV 最新日期停在某个交易日，之后每天只有 0-11 条新纪录（而非正常的 5,000+）
+- 日志显示 `总计 14 只` 而非 `总计 5204 只`
 
-**修复**：手动删 CSV 数据后，必须同时删除 `_update_progress.txt`：
+**修复（2026-06-01）**：`update_data.py` 所有退出点自动调用 `_clean_progress()`：
 
-```bash
-rm -f data/_update_progress.txt
+```python
+def _clean_progress():
+    """删除进度文件，确保下次更新从头开始"""
+    if os.path.exists(PROGRESS_FILE):
+        os.remove(PROGRESS_FILE)
 ```
 
-否则 `update_data.py` 会输出 `"检测到上次进度: XXXX 只已完成，跳过"` 并跳过
-所有股票。此时增量更新虽完成但 `新增 0 条记录`，CSV 中仍缺失已删数据。
+调用点：
+- 快速预检退出（数据已最新）
+- `download_start >= today` 退出
+- `todo_stocks` 为空退出（所有股票已完成）
+- 正常完成退出
 
-**注意**：`_update_progress.txt` 与 `download_data.py` 的 `_progress.txt` 是
-两个不同的文件，互不影响。
+同时补上了缺失的 `_clean_cache()` 函数（之前 `todo_stocks` 为空路径调用它但未定义，
+会导致 `NameError` 崩溃）。
 
-运行后检查：
+**手动排查**：如果再次出现类似问题，删掉进度文件后重跑：
+```bash
+rm -f data/_update_progress.txt
+python core/update_data.py
+```
+
+**验证**：运行后检查：
 1. CSV 行数应增加（非周末运行，且确实有新的交易日数据）
 2. `_update_log.txt` 确认无错误
-3. `.npz` 文件已被删除
+3. `.npz` 文件已被重建（非删除）
 4. `python -c "import pandas as pd; d=pd.read_csv('data/a_stock_kline_3y.csv'); print(d.date.max())"`
 5. 无重复：`python -c "import pandas as pd; d=pd.read_csv('data/a_stock_kline_3y.csv'); print(d.duplicated(subset=['股票代码','date']).sum())"`
+
+### 6. Force 模式过滤逻辑陷阱 [已修复：2026-06-01]
+
+**根因**：`--force` 模式下仍使用增量模式相同的 `> latest_for_stock` 过滤。当需要
+回补历史缺口时（如某股在 CSV 中已有 5/27-5/29 数据但缺失 5/20-5/26），force 从
+5/20 下载后，每条记录的 date 都 ≤ 该股最新日期 5/29 → 全部被过滤 → 新增 0 行。
+
+**修复**：force 模式使用 `date >= download_start` 替代 `> latest_for_stock`：
+
+```python
+if args.force:
+    filtered = [r for r in data
+                if parse_date(r["date"]) >= download_start]
+else:
+    # 增量模式保持原逻辑
+    filtered = [r for r in data
+                if parse_date(r["date"]) > latest_for_stock]
+```
+
+CSV 可能产生少量重复行，但 `_build_cache()` 中的 `drop_duplicates(subset=["股票代码", "date"])`
+会自动去重，不影响 NPZ 质量。
+
+### 7. Force 模式新浪 API 限流
+
+**现象**：force 模式下 5 进程并行下载 11 天数据（5,200 只 × 11 = 57,200 次请求）
+→ 新浪返回空响应 → akshare 报 `No value to decode` → 4,908/5,207 失败。
+
+**对策**：force 回补时将 `WORKERS` 从 5 降到 2，减少并发避免触发限流。增量模式
+（只下载 2-3 天）5 进程通常无问题。
+
+```python
+WORKERS = 2  # force 回补时降低避免限流
+```

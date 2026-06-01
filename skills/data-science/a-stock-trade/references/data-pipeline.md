@@ -36,14 +36,47 @@ python core/update_data.py     # Then re-run
 
 Otherwise update skips all "completed" stocks → 0 new rows.
 
+## Safe Flush Pattern (CRITICAL)
+
+**Golden rule**: Write data to CSV FIRST, then record progress SECOND. Never the reverse.
+
+If progress is saved before CSV flush and the program crashes in between:
+- Progress file says "done" → stock skipped on resume
+- Data never reached CSV → permanently lost
+
+Correct pattern (used in `update_data.py`):
+```python
+# Step 1: Write to CSV
+df_out.to_csv(OUTPUT_CSV, mode="a", ...)
+# Step 2: Only after successful write, record progress
+save_batch_progress(done_buffer)
+```
+
+Wrong pattern (fixed in `download_data.py` 2026-06-01):
+```python
+# BUG: progress saved before CSV flush
+save_progress(code, name, status, len(data))  # ← done first
+buffer.extend(data)  # ← data still in memory, not on disk
+```
+
+## Data Pipeline Files — Cross-File Consistency Checklist
+
+When adding a new data file or modifying data pipeline behavior, audit ALL of these:
+
+| File | Pattern to Check |
+|------|-----------------|
+| `update_data.py` | `_clean_progress()` on all exits; error file cleaned at start; `log_fh` in try/finally; CSV encoding `utf-8-sig` both read and write; force mode filter `>= download_start` |
+| `download_data.py` | Progress saved AFTER CSV flush (not before); progress+error files cleaned on completion; `log_fh` in try/finally; stock prefix filtering consistent with update_data.py |
+| `update_fundamentals.py` | Error file cleaned at start; `_build_cache` calls `drop_duplicates` before pivoting; `load_existing_codes` handles incremental skip |
+| `data_loader.py` | `load_stock_name_map` has NPZ→JSON→CSV fallback; `_build_stock_map_from_csv` exists as CSV fallback |
+
+**Common trap patterns** found 2026-06-01 across all 3 update scripts:
+1. Progress/error files appended to but NEVER deleted → infinite growth + stale state
+2. File handles (`log_fh`) opened without try/finally → leak on exception
+3. CSV written with `utf-8-sig` but read with plain `utf-8` → encoding drift
+4. NPZ cache built without `drop_duplicates` → force-re-download creates duplicates in cache
+
 ## Scheduled Tasks (Windows)
-
-- `core/update_data.bat` must end with `exit /b 0` — otherwise Task Scheduler reports exit code 2
-- Batch files run via schtasks need absolute Python paths (`C:\Users\Mayn\AppData\Local\Programs\Python\Python311\python.exe`), not bare `python`
-- Batch files with Chinese characters in echo statements corrupt when run via schtasks (UTF-8 vs GBK) — use ASCII-only English
-- `chcp 65001 >nul` at top of batch file for Unicode in `%date%/%time%`
-
-## stdlib Name Collision
 
 `core/platform.py` shadows stdlib `platform` module. When akshare/pandas calls `import platform`, it loads the project file → `AttributeError: module 'platform' has no attribute 'python_implementation'`.
 

@@ -230,17 +230,28 @@ NPZ 优先（快）→ CSV 兜底（慢但总能工作）。
 列构建 `{code_int: [name, latest_close]}` 映射。两个文件（`data_loader.py` /
 `app_utils.py`）均已实现。
 
-### 进度文件陷阱
+### 进度文件陷阱 [已自动修复]
 
-`_update_progress.txt` 记录每只股票的最新更新日期。如果**手动删除了 CSV 中某日期的数据**
-（例如测试增量更新），必须**同步删除** `_update_progress.txt`，否则
-`update_data.py` 会错误地跳过所有"已完成"的股票，导致增量更新拉到 0 行新数据。
+`_update_progress.txt` 记录每只股票的上次更新状态用于断点续传。**代码已在所有退出点
+自动调用 `_clean_progress()` 清理**，确保每次增量更新从头开始。如果仍出现
+`total_todo` 异常少（< 100 只），手动删除进度文件后重跑：
 
-正确步骤：
 ```bash
-rm data/_update_progress.txt   # 必须先清进度
-python core/update_data.py     # 再运行更新
+rm data/_update_progress.txt   # 备用手动清理
+python core/update_data.py
 ```
+
+同时，`_clean_cache()` 函数已于 2026-06-01 补上（之前被调用但未定义，会导致
+早期退出路径崩溃）。`_update_errors.txt` 每次运行前自动清理。
+
+**全量下载 (`download_data.py`) 同样受影响**：其 `_progress.txt` 和 `_errors.txt`
+也需每次运行后清理。已于 2026-06-01 修复：CSV 写入先于进度记录（safe flush），
+完成后自动调用 `_clean_progress_and_errors()`。
+
+**跨文件审计清单**：修改任何数据脚本时，必须检查 `update_data.py`、`download_data.py`、
+`update_fundamentals.py` 三文件是否共享相同模式：
+safe flush、文件清理、编码一致性（utf-8-sig）、log_fh 异常安全（try/finally）。
+详见 `a-stock-trade` skill 的 `references/data-pipeline.md`。
 
 ### Pitfall: akshare 返回非 A 股代码（B 股/债券/基金）
 
