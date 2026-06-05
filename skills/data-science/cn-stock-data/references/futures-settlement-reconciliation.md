@@ -1,20 +1,6 @@
----
-name: futures-settlement
-description: Parse exchange PDF settlement reports, cross-check program-generated monthly reports against official exchange settlements, and validate balance equations.
-version: 1.0.0
-author: Hermes Agent
-metadata:
-  hermes:
-    tags: [期货, 结算单, PDF解析, 校对, monthly-report, 月报]
----
-
 # Futures Settlement Reconciliation
 
 Cross-check program-generated monthly settlement Excel reports against official exchange PDF settlement statements. Covers PDF parsing, aggregation comparison, and balance-equation validation.
-
-## Trigger
-
-When the user asks to verify, reconcile, cross-check, or compare a program-generated monthly report against an official exchange PDF settlement, load this skill.
 
 ## Workflow
 
@@ -37,7 +23,7 @@ Column indices (split by whitespace):
 [6]=price [7]=lots [8]=turnover [9]=oc [10]=fee [11]=pnl_or_premium [12...]=etc
 ```
 
-Pitfalls:
+### Pitfalls
 - Lines split across PDF pages — reassemble by checking for `^\d{8}\s` as new-line marker
 - Page headers/footers like `第 X 页/共 Y页` must be filtered
 - Contract names with hyphens (e.g., `eb2607-C-9800`) may cause split-lines
@@ -46,14 +32,6 @@ Pitfalls:
 ## XLSX Parsing
 
 Use dynamic section detection — search for header keywords (`期货成交汇总`, `期权成交汇总`) rather than hardcoded row numbers. Column layout varies between versions.
-
-## Verification Script
-
-Run `references/verify_monthly_report.py` in the project directory. It compares:
-- All 12 fund fields
-- Daily fees and P&L totals  
-- Aggregated trade groups by (date, contract, direction)
-- Balance equation validation
 
 ## Option P&L Script (`期权收益.py`) Pitfalls
 
@@ -66,4 +44,11 @@ When working with `期权收益.py` in the monthly_report project:
 3. **Key name typo**: `trades[0].get('expiry', '')` should be `trades[0].get('expiry_date', '')`.
 
 4. **Dead accumulators**: `all_close_pnl`, `all_close_fee`, `all_exp_pnl`, `all_exp_fee` in `generate_option_report_xlsx` accumulate but are never used — safe to remove.
-The script is in `references/verify_monthly_report.py`.
+
+## Verification
+
+Run `verify_monthly_report.py` in the project directory. It compares:
+- All 12 fund fields
+- Daily fees and P&L totals  
+- Aggregated trade groups by (date, contract, direction)
+- Balance equation validation

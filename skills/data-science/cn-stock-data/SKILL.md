@@ -1,9 +1,9 @@
 ---
 name: cn-stock-data
 title: Chinese Financial Market Data (A-Share + Futures)
-description: "Download, filter, and manage Chinese financial market data — A-share stock K-line AND fundamentals, plus Chinese futures K-line (daily/minute). Covers baostock, akshare, and multi-process batch download patterns for both stocks and futures."
-trigger: user asks for A-share stock data, K-line, OHLC data, financial data, fundamentals, 基本面, 财务数据, Chinese futures data, 期货数据, CTA data, commodity futures, index futures, Chinese stock market historical prices, or multi-process Chinese financial data download
-tags: [finance, stocks, a-share, futures, k-line, baostock, data-acquisition, cta, multi-process]
+description: "Download, filter, and manage Chinese financial market data — A-share stock K-line AND fundamentals, plus Chinese futures K-line (daily/minute). Covers baostock, akshare, and multi-process batch download patterns for both stocks and futures. Also covers futures settlement reconciliation: PDF parsing, cross-checking program-generated reports against exchange statements, and balance-equation validation."
+trigger: user asks for A-share stock data, K-line, OHLC data, financial data, fundamentals, 基本面, 财务数据, Chinese futures data, 期货数据, CTA data, commodity futures, index futures, Chinese stock market historical prices, multi-process Chinese financial data download, futures settlement reconciliation, 结算单 cross-check, or PDF settlement parsing
+tags: [finance, stocks, a-share, futures, k-line, baostock, data-acquisition, cta, multi-process, settlement, reconciliation, PDF-parsing]
 ---
 
 # Chinese Stock Market Data (A-Share)
@@ -183,6 +183,21 @@ progress files, resume support) used for stocks also applies to futures minute d
 (`a_stock_trade`). Do not mix or reference files across domains.
 
 ---
+
+## Futures Settlement Reconciliation
+
+When you've downloaded futures data and need to cross-check program-generated monthly
+settlement reports against official exchange PDFs, see the full reconciliation
+workflow in `references/futures-settlement-reconciliation.md`. It covers:
+
+- PDF parsing (exchange settlement format with two row types: individual trades and aggregated close summaries)
+- XLSX parsing with dynamic section-header detection
+- Balance equation validation: `期末结存 = 期初结存 + 出入金 + 平仓盈亏 - 手续费 + 权利金收入`
+- Option P&L script pitfalls (same-month exercise detection, variable scoping, key name typos)
+
+**Quick verification:** Run `verify_monthly_report.py` in the monthly_report project
+directory — it compares fund fields, daily fees/P&L, aggregated trade groups, and
+validates the balance equation.
 
 ## Next Step: Backtesting
 
