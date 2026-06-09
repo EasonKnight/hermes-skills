@@ -74,6 +74,15 @@ Adapt the config import path to the project's actual module.
 - **pip default source is slow in China**: always add `-i https://pypi.tuna.tsinghua.edu.cn/simple`. If the user says "用国内源", you forgot this.
 - **`git clone` from GitHub in China**: direct GitHub may be slow but usually works with `--depth 1`. Mirror services (gitclone.com, ghproxy) are unreliable — don't try more than one. If they fail, tell the user and ask them to download manually.
 - **Partially cloned repos**: if a previous clone is interrupted, the directory exists but is broken. `rm -rf` it before retrying.
+- **Interactive CLIs (prompt_toolkit/questionary) on Windows via git-bash**: they crash with `NoConsoleScreenBufferError: Found xterm-256color, while expecting a Windows console`. This is a hard incompatibility — prompt_toolkit detects `sys.platform == "win32"` and attempts `Win32Output`, but the git-bash/MSYS terminal has no Windows screen buffer. Neither `winpty` nor `PROMPT_TOOLKIT_OUTPUT=vt100` fixes it inside a Hermes PTY session. **Solution**: create a `.bat` launcher that the user double-clicks in native cmd/Windows Terminal. Do NOT try to run it through `terminal` with `pty=true` — it will always fail. The .bat launcher pattern:
+  ```bat
+  @echo off
+  cd /d "C:\Users\Mayn\Desktop\<project>"
+  call venv\Scripts\activate.bat
+  <entry-point-command>
+  pause
+  ```
+  Place it in the project root with a Chinese name like `启动Xxx.bat` so it's obvious on the Desktop.
 
 ## Project-Specific References
 
