@@ -140,6 +140,45 @@ Dark modern theme with constants in `core/app_config.py`. See `references/gui-co
 ## References
 
 - `references/gui-conventions.md` — Full tkinter GUI patterns: Treeview, color scheme, DarkScrollbar, DPI handling, startup optimization, real-time quotes
+- `references/combined-positions.md` — Combined positions panel: pos_bar_lbls layout, signal.json format, proportional scaling, real-time updates
 - `references/backtest-engine.md` — Engine internals: fixed-base backtest, forward-fill alpha, limit-up/down logic, position capping, cost accounting bugs
 - `references/data-pipeline.md` — Data pipeline: A-share filtering, NPZ cache, progress files, scheduled tasks
 - `references/fundamental-data-system.md` — Fundamental data: API selection, field mapping, disclosure date handling
+
+## Combined Positions Panel (组合持仓)
+
+The right column of the "实盘策略" tab shows the combined portfolio after proportional position scaling (等比缩仓).
+
+### Bottom Bar Labels (`pos_bar_lbls` — 8 labels matching 8 POS_COLS)
+
+| Index | Column | Content |
+|-------|--------|---------|
+| `[0]` | 股票代码 | `合计X只(N→X)` — stock count summary |
+| `[1]` | 股票名称 | (empty) |
+| `[2]` | 总手数 | total lots |
+| `[3]` | 参考价 | average price per share |
+| `[4]` | 总市值 | total market value |
+| `[5]` | 涨跌幅 | **合计 +X.XX%** — weighted daily return rate |
+| `[6]` | 涉及策略 | `分配 ¥XXX` — total allocation |
+| `[7]` | 加权涨跌 | **收益 ¥+X,XXX** — daily profit amount (signed) |
+
+Colors: red (#f85149) for gains, green (#56d364) for losses (international convention).
+
+### signal.json Auto-Save
+
+`_save_signal_json(adjusted=None)` method in `core/app_live.py` saves the combined positions (after proportional scaling) to `signal.json` in the project root. Format:
+
+```json
+[{"stock": "600000.SH", "volume": 300}, {"stock": "000001.SZ", "volume": 200}]
+```
+
+- `stock`: 6-digit code + exchange suffix (SH/SZ, determined by code prefix)
+- `volume`: number of shares (lots × 100), NOT lots
+- No positions → writes `[]`
+
+**Save triggers**:
+1. App startup → `self.after(1500, lambda: self._save_signal_json())`
+2. After \"运行全部实盘\" → `refresh_combined_positions()` → `self._save_signal_json(adjusted)`
+3. Any call to `refresh_combined_positions` (re-sort, manual refresh)
+
+**Implementation pattern**: Method first checks `_pos_data` if no `adjusted` argument provided, writes empty array if no data available.
