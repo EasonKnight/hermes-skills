@@ -62,15 +62,29 @@ brew install llama.cpp
 ```
 
 ```bash
+# Windows - winget (may lag behind latest CUDA builds)
 winget install llama.cpp
 ```
 
 ```bash
+# Windows - pre-built CUDA binaries (recommended for GPU)
+# Download from GitHub Releases, no compilation needed.
+# Match your CUDA version: CUDA 12.4 or CUDA 13.3 zips available.
+# Also grab the matching cudart DLL zip. See references/windows-deployment.md.
+```
+
+```bash
+# Build from source (all platforms)
 git clone https://github.com/ggml-org/llama.cpp
 cd llama.cpp
 cmake -B build
 cmake --build build --config Release
 ```
+
+> **China network note**: GitHub and Hugging Face may be unreachable. Use mirrors:
+> - GitHub → `https://gh.llkk.cc/https://github.com/...`
+> - Hugging Face → `https://hf-mirror.com/...`
+> Full download workflow in `references/windows-deployment.md`.
 
 ### Run directly from the Hugging Face Hub
 
@@ -237,6 +251,7 @@ Source URLs:
 - **[optimization.md](references/optimization.md)** — CPU threading, BLAS, GPU offload heuristics, batch tuning, benchmarks
 - **[hardware-sizing.md](references/hardware-sizing.md)** — VRAM/RAM/CPU → model size & quant mapping, DeepSeek-specific sizing, example hardware profiles
 - **[troubleshooting.md](references/troubleshooting.md)** — install/convert/quantize/inference/server issues, Apple Silicon, debugging
+- **[windows-deployment.md](references/windows-deployment.md)** — Windows pre-built CUDA binary deployment (no compilation), Chinese network mirrors, step-by-step setup
 
 ## Resources
 
